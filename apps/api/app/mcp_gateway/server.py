@@ -180,9 +180,9 @@ def create_internal_mcp_server(
     ingestion_coordinator = ingestion or get_fda_ingestion_coordinator()
     tool_limits = limits or OpenFDAToolLimits()
     server = FastMCP[None](
-        name="Dr. Insilico Internal Tools",
+        name="Formulary Internal Tools",
         instructions=(
-            "Read-only pharmaceutical research tools maintained by Dr. Insilico. "
+            "Read-only pharmaceutical research tools maintained by Formulary. "
             "FDA results include provenance and limitations; cite them and do not present them "
             "as medical advice or proof of causality. Use the bioequivalence evidence intake "
             "tool before researching reference values or test/reference comparisons. Cache "

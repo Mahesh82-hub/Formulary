@@ -1,6 +1,6 @@
-# Dr. Insilico Web
+# Formulary Web
 
-The owned chat interface for Dr. Insilico. It provides passwordless sign-in, conversation
+The owned chat interface for Formulary. It provides passwordless sign-in, conversation
 management, model selection, streamed assistant turns, tool activity, message editing, and
 response regeneration across desktop and mobile layouts. It also includes an authenticated
 bioequivalence workspace for exploratory comparisons, supplied-confidence-interval assessment,

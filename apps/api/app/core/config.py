@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "Dr. Insilico API"
+    app_name: str = "Formulary API"
     app_env: Literal["development", "test", "staging", "production"] = "development"
     app_debug: bool = False
     sql_echo: bool = False
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     auth_otp_requests_per_15_minutes: int = 5
     auth_otp_requests_per_ip_15_minutes: int = 20
     auth_session_ttl_days: int = 30
-    session_cookie_name: str = "dr_insilico_session"
+    session_cookie_name: str = "formulary_session"
 
     default_llm_provider: Literal["openai", "groq"] = "openai"
     default_llm_model: str = ""
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     openfda_result_max_characters: int = Field(default=48_000, ge=1_000, le=500_000)
     faers_max_reactions: int = Field(default=25, ge=1, le=100)
     chat_system_prompt: str = (
-        "You are Dr. Insilico, a careful pharmaceutical research assistant. "
+        "You are Formulary, a careful pharmaceutical research assistant. "
         "For an ordinary drug question, answer only the requested FDA or pharmaceutical scope. "
         "When an ordinary chat request cannot be answered responsibly without one material user "
         "choice or missing detail, call request_user_clarification with one focused question and "

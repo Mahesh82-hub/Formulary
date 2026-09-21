@@ -54,7 +54,7 @@ async def test_email_otp_login_session_and_logout_flow() -> None:
             )
             assert verify_response.status_code == 200
             assert verify_response.json()["user"]["email"] == email
-            assert "dr_insilico_session" in client.cookies
+            assert "formulary_session" in client.cookies
 
             me_response = await client.get("/api/v1/auth/me")
             assert me_response.status_code == 200

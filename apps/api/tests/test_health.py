@@ -8,7 +8,7 @@ def test_root() -> None:
         response = client.get("/")
 
     assert response.status_code == 200
-    assert response.json() == {"name": "Dr. Insilico API", "version": "0.1.0"}
+    assert response.json() == {"name": "Formulary API", "version": "0.1.0"}
 
 
 def test_health() -> None:

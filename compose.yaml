@@ -1,9 +1,9 @@
-name: dr-insilico
+name: formulary
 
 services:
   db:
     image: pgvector/pgvector:0.8.5-pg18-trixie
-    container_name: dr-insilico-db
+    container_name: formulary-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}

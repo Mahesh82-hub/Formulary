@@ -48,11 +48,11 @@ class SMTPEmailSender:
             raise EmailDeliveryError("SMTP_HOST and SMTP_FROM_EMAIL must be configured")
 
         message = EmailMessage()
-        message["Subject"] = "Your Dr. Insilico login code"
+        message["Subject"] = "Your Formulary login code"
         message["From"] = settings.smtp_from_email
         message["To"] = recipient
         message.set_content(
-            f"Your Dr. Insilico login code is {code}. "
+            f"Your Formulary login code is {code}. "
             f"It expires in {expires_in_minutes} minutes and can only be used once."
         )
 

@@ -1,4 +1,4 @@
-# Dr. Insilico API
+# Formulary API
 
 FastAPI backend for chat orchestration, retrieval, tools, and pharmaceutical data sources.
 
@@ -32,7 +32,7 @@ path. See [`docs/fda-data-architecture.md`](../../docs/fda-data-architecture.md)
 From the repository root:
 
 ```bash
-conda activate insilico
+conda activate formulary
 cd apps/api
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
@@ -47,7 +47,7 @@ After authenticating with the email OTP endpoints and creating a conversation, s
 ```bash
 curl -N -X POST http://localhost:8000/api/v1/conversations/CONVERSATION_ID/turns \
   -H 'Content-Type: application/json' \
-  -b 'dr_insilico_session=SESSION_TOKEN' \
+  -b 'formulary_session=SESSION_TOKEN' \
   -d '{"text":"Convert 2500 mcg to mg"}'
 ```
 

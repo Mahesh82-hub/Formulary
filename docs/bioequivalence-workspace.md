@@ -1,6 +1,6 @@
 # Bioequivalence workspace
 
-Dr. Insilico separates general FDA research from deterministic test/reference comparison.
+Formulary separates general FDA research from deterministic test/reference comparison.
 
 ## Product modes
 

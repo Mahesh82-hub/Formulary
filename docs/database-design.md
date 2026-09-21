@@ -1,4 +1,4 @@
-# Dr. Insilico database design proposal
+# Formulary database design proposal
 
 Status: architecture decisions approved. Authentication/chat, ingestion, and local BGE hybrid
 retrieval migrations are implemented; remaining domains are applied incrementally.

@@ -1,3 +1,3 @@
-"""Dr. Insilico API package."""
+"""Formulary API package."""
 
 __version__ = "0.1.0"

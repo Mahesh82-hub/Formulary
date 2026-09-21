@@ -1,6 +1,6 @@
 # MCP architecture
 
-Dr. Insilico uses FastMCP as its tool protocol boundary. FastAPI remains the application API
+Formulary uses FastMCP as its tool protocol boundary. FastAPI remains the application API
 that owns authentication, conversations, persistence, and browser-facing streaming.
 
 ## Current development topology

@@ -1,2 +1,2 @@
-cd ~/Desktop/Insilico
-docker compose exec db psql -U dr_insilico -d dr_insilico
+cd "$(git rev-parse --show-toplevel)"
+docker compose exec db psql -U formulary -d formulary

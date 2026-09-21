@@ -1,4 +1,4 @@
-# Dr. Insilico
+# Formulary
 
 An application-owned pharmaceutical research chatbot with a FastAPI orchestration layer,
 FastMCP tools, PostgreSQL/pgvector, and a responsive Next.js chat interface.

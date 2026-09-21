@@ -1,6 +1,6 @@
 # Upstream sources
 
-Dr. Insilico treats every external evidence provider as an *upstream source*. openFDA is the
+Formulary treats every external evidence provider as an *upstream source*. openFDA is the
 first one, but the transport layer is deliberately source-agnostic so PubMed,
 ClinicalTrials.gov, DailyMed, RxNorm, and other free sources reuse it rather than each growing
 their own retry and pacing code.
