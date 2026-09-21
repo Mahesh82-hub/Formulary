@@ -1,0 +1,2 @@
+cd ~/Desktop/Insilico
+docker compose exec db psql -U dr_insilico -d dr_insilico

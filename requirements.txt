@@ -1,0 +1,33 @@
+# API runtime
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+pydantic-settings>=2.7,<3
+python-multipart>=0.0.20,<1
+email-validator>=2.2,<3
+
+# PostgreSQL, ORM, and migrations
+sqlalchemy[asyncio]>=2.0,<3
+psycopg[binary,pool]>=3.2,<4
+alembic>=1.14,<2
+pgvector>=0.3,<1
+
+# Document ingestion and local BGE embeddings (no hosted embedding provider)
+llama-index-core>=0.14.23,<0.15
+huggingface-hub>=1,<2
+tokenizers>=0.22,<1
+onnxruntime>=1.23,<2
+numpy>=2,<3
+pypdf>=5.7,<7
+pdfplumber>=0.11.7,<0.12
+Pillow>=11,<13
+pytesseract>=0.3.13,<0.4
+
+# HTTP clients and testing
+httpx>=0.28,<1
+fastmcp>=3,<4
+pytest>=8.3,<10
+pytest-asyncio>=0.25,<2
+
+# Code quality
+ruff>=0.9,<1
+mypy>=1.14,<2

@@ -1,0 +1,425 @@
+@import "tailwindcss";
+
+:root {
+  --background: #faf8fc;
+  --surface: #ffffff;
+  --surface-soft: #f5f0f9;
+  --surface-strong: #ebe3f1;
+  --foreground: #25172f;
+  --muted: #74687c;
+  --border: #e5dcea;
+  --primary: #431677;
+  --primary-hover: #35105f;
+  --primary-soft: #f0e7f7;
+  --accent: #a350d9;
+  --accent-soft: #f7ebfc;
+  --chart-secondary: #a350d9;
+  --danger: #b53b55;
+  --shadow: 0 18px 60px rgb(67 22 119 / 9%);
+  color-scheme: light;
+}
+
+.dark {
+  --background: #120c18;
+  --surface: #1c1423;
+  --surface-soft: #271b30;
+  --surface-strong: #35233f;
+  --foreground: #f7f1fa;
+  --muted: #b4a6bc;
+  --border: #3b2a45;
+  --primary: #b875e6;
+  --primary-hover: #ca8ff0;
+  --primary-soft: #321d42;
+  --accent: #d39af0;
+  --accent-soft: #36203f;
+  --chart-secondary: #e3a4f2;
+  --danger: #f08a9e;
+  --shadow: 0 18px 60px rgb(3 0 7 / 35%);
+  color-scheme: dark;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-rendering: optimizeLegibility;
+}
+
+.app-shell {
+  background:
+    radial-gradient(circle at 82% -8%, color-mix(in srgb, var(--accent) 9%, transparent) 0, transparent 27rem),
+    radial-gradient(circle at 24% 105%, color-mix(in srgb, var(--primary) 6%, transparent) 0, transparent 30rem),
+    var(--background);
+}
+
+.brand-mark {
+  background: linear-gradient(145deg, #a350d9 0%, #6b21a8 100%);
+  color: #fff;
+  box-shadow:
+    0 5px 16px rgb(67 22 119 / 22%),
+    0 0 0 1px rgb(255 255 255 / 12%);
+}
+
+.brand-hero {
+  background:
+    radial-gradient(circle at 22% 15%, rgb(163 80 217 / 32%) 0, transparent 31rem),
+    radial-gradient(circle at 92% 88%, rgb(144 95 221 / 20%) 0, transparent 28rem),
+    linear-gradient(145deg, #2c0d4d 0%, #431677 52%, #5d218c 100%);
+}
+
+.sidebar-shell {
+  background:
+    radial-gradient(circle at 15% -8%, rgb(163 80 217 / 18%) 0, transparent 16rem),
+    linear-gradient(180deg, #17101e 0%, #100b15 48%, #0d0911 100%);
+  box-shadow: 12px 0 42px rgb(20 7 29 / 14%);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+.sidebar-search::-webkit-search-cancel-button {
+  display: none;
+}
+
+.sidebar-shell .focus-ring:focus-visible {
+  outline-color: #c47bf0;
+}
+
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 12%) transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 12%);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.chat-content-width {
+  max-width: 820px;
+}
+
+@media (min-width: 1536px) {
+  .chat-content-width {
+    max-width: 1120px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .chat-content-width {
+    max-width: 1280px;
+  }
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--primary) 24%, transparent);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 70%, white);
+  outline-offset: 2px;
+}
+
+.glass {
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.message-copy {
+  font-size: 15px;
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+}
+
+.message-copy > :first-child,
+.message-copy > :first-child > :first-child {
+  margin-top: 0;
+}
+
+.message-copy > :last-child,
+.message-copy > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+.message-copy p,
+.message-copy ul,
+.message-copy ol,
+.message-copy blockquote,
+.message-copy pre,
+.message-copy .message-table-wrap,
+.message-copy hr {
+  margin: 0 0 0.9rem;
+}
+
+.message-copy h1,
+.message-copy h2,
+.message-copy h3,
+.message-copy h4,
+.message-copy h5,
+.message-copy h6 {
+  margin: 1.35em 0 0.55em;
+  color: var(--foreground);
+  font-weight: 650;
+  line-height: 1.28;
+  letter-spacing: -0.025em;
+}
+
+.message-copy h1 {
+  font-size: 1.55rem;
+}
+
+.message-copy h2 {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.32rem;
+  font-size: 1.3rem;
+}
+
+.message-copy h3 {
+  font-size: 1.12rem;
+}
+
+.message-copy h4,
+.message-copy h5,
+.message-copy h6 {
+  font-size: 1rem;
+}
+
+.message-copy strong {
+  color: var(--foreground);
+  font-weight: 650;
+}
+
+.message-copy a {
+  color: var(--primary);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  text-underline-offset: 3px;
+  transition: color 150ms ease, text-decoration-color 150ms ease;
+}
+
+.message-copy a:hover {
+  color: var(--primary-hover);
+  text-decoration-color: currentColor;
+}
+
+.message-copy ul,
+.message-copy ol {
+  padding-left: 1.45rem;
+}
+
+.message-copy ul {
+  list-style: disc;
+}
+
+.message-copy ol {
+  list-style: decimal;
+}
+
+.message-copy li {
+  padding-left: 0.18rem;
+}
+
+.message-copy li + li {
+  margin-top: 0.28rem;
+}
+
+.message-copy li > ul,
+.message-copy li > ol {
+  margin: 0.28rem 0 0;
+}
+
+.message-copy li::marker {
+  color: var(--primary);
+}
+
+.message-copy .contains-task-list {
+  list-style: none;
+  padding-left: 0.25rem;
+}
+
+.message-copy .task-list-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+}
+
+.message-copy input[type="checkbox"] {
+  width: 0.9rem;
+  height: 0.9rem;
+  accent-color: var(--primary);
+}
+
+.message-copy blockquote {
+  border-left: 3px solid var(--primary);
+  border-radius: 0 0.5rem 0.5rem 0;
+  background: color-mix(in srgb, var(--primary-soft) 55%, transparent);
+  padding: 0.7rem 0.9rem;
+  color: var(--muted);
+}
+
+.message-copy blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.message-copy code {
+  border: 1px solid var(--border);
+  border-radius: 0.38rem;
+  background: var(--surface-soft);
+  padding: 0.12rem 0.35rem;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.87em;
+}
+
+.message-copy pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--background));
+  padding: 0.85rem 1rem;
+  line-height: 1.6;
+}
+
+.message-copy pre code {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 0.82rem;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.message-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.message-copy table {
+  width: 100%;
+  min-width: 46rem;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.message-copy th,
+.message-copy td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.65rem 0.8rem;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.message-copy th:first-child,
+.message-copy td:first-child {
+  width: 18%;
+  min-width: 9.5rem;
+}
+
+.message-copy th:last-child,
+.message-copy td:last-child {
+  width: 22%;
+  min-width: 11rem;
+  overflow-wrap: anywhere;
+}
+
+.message-copy th {
+  background: var(--surface-soft);
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.message-copy tr:last-child td {
+  border-bottom: 0;
+}
+
+.message-copy tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--surface-soft) 55%, transparent);
+}
+
+.message-copy del {
+  color: var(--muted);
+}
+
+.message-copy hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.message-copy img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 280ms ease-out both;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 1.4s ease-in-out infinite;
+}
