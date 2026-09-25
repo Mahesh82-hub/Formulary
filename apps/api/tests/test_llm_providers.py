@@ -212,8 +212,7 @@ async def test_groq_provider_updates_system_prompt_and_omits_disabled_tool_field
                                         "function": {
                                             "name": "convert_mass",
                                             "arguments": (
-                                                '{"value":1000,"from_unit":"mcg",'
-                                                '"to_unit":"mg"}'
+                                                '{"value":1000,"from_unit":"mcg","to_unit":"mg"}'
                                             ),
                                         },
                                     }
@@ -356,3 +355,50 @@ async def test_groq_provider_does_not_retry_nontransient_http_failure() -> None:
         "provider_error_type": "invalid_request_error",
         "provider_error_code": "tool_use_failed",
     }
+
+
+@pytest.mark.asyncio
+async def test_rate_limits_wait_as_long_as_the_provider_asks_then_succeed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Groq returned 'try again in 894ms'; a fixed 0.25 s retry simply failed again."""
+    import asyncio
+
+    from app.llm.groq import GroqChatProvider
+    from app.llm.models import LLMMessage
+
+    waits: list[float] = []
+
+    async def record(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", record)
+    responses = [
+        httpx.Response(
+            429,
+            json={"error": {"message": "Rate limit reached. Please try again in 894.93ms."}},
+        ),
+        httpx.Response(429, headers={"Retry-After": "2"}, json={"error": {"message": "slow"}}),
+        httpx.Response(
+            200,
+            json={
+                "id": "ok",
+                "choices": [{"message": {"role": "assistant", "content": "Done."}}],
+            },
+        ),
+    ]
+    provider = GroqChatProvider(
+        api_key="key",
+        base_url="https://groq.test/openai/v1",
+        timeout_seconds=10,
+        max_retries=0,
+        transport=httpx.MockTransport(lambda _: responses.pop(0)),
+    )
+
+    completion = await provider.complete(
+        model="m", system_prompt="s", messages=[LLMMessage(role="user", content="hi")], tools=[]
+    )
+
+    assert completion.text == "Done."
+    assert 0.9 < waits[0] < 1.2  # the 894 ms the provider asked for, plus headroom
+    assert 2.0 < waits[1] < 2.5  # Retry-After: 2

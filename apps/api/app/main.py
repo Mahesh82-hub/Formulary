@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -14,7 +16,23 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    monitor_task: asyncio.Task[None] | None = None
+    if settings.intelligence_monitor_enabled:
+        from app.intelligence.monitor import get_regulatory_monitor
+        from app.intelligence.service import get_notification_dispatcher, run_forever
+
+        monitor_task = asyncio.create_task(
+            run_forever(
+                get_regulatory_monitor(),
+                get_notification_dispatcher(),
+                interval_minutes=settings.intelligence_poll_interval_minutes,
+            )
+        )
     yield
+    if monitor_task is not None:
+        monitor_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await monitor_task
     await engine.dispose()
 
 

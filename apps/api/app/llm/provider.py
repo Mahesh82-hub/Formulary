@@ -60,4 +60,5 @@ class LLMProvider(Protocol):
         tools: list[LLMToolDefinition],
         continuation: dict[str, object] | None = None,
         tool_outputs: list[LLMToolOutput] | None = None,
+        allow_web_search: bool = False,
     ) -> LLMCompletion: ...

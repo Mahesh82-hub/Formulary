@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
 from typing import Annotated, Any, Literal, get_args
@@ -10,9 +11,25 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from app.clinicaltrials.client import get_clinicaltrials_client
 from app.core.config import Settings, get_settings
-from app.fda.client import OpenFDAClient, get_openfda_client
-from app.fda.models import OPENFDA_MAX_SKIP, OpenFDADataset, OpenFDAResult
+from app.db.session import async_session_factory
+from app.fda.client import OpenFDAClient, get_openfda_client, referenced_fields
+from app.fda.composition import DrugCompositionResult, drug_composition
+from app.fda.models import (
+    OPENFDA_MAX_SKIP,
+    FDAProvenance,
+    OpenFDADataset,
+    OpenFDAQuery,
+    OpenFDAResult,
+)
+from app.fda.names import search_names
+from app.fda.structured import (
+    FDAFilter,
+    FDAQueryRejection,
+    QueryValidationError,
+    compile_query,
+)
 from app.ingestion.models import (
     DocumentChunkPage,
     EvidenceSearchResult,
@@ -21,6 +38,8 @@ from app.ingestion.models import (
 )
 from app.ingestion.pdf import OCRMode
 from app.ingestion.service import FDAIngestionCoordinator, get_fda_ingestion_coordinator
+from app.intelligence.repository import list_events
+from app.intelligence.types import EventType, Significance
 from app.mcp_gateway.models import (
     MassConversion,
     SimulationEvidenceContext,
@@ -30,10 +49,12 @@ from app.mcp_gateway.models import (
     SimulationParameterCategory,
     UserClarificationRequest,
 )
+from app.pubmed.client import get_pubmed_client
 from app.schemas.bioequivalence import (
     BioequivalenceAnalysisRequest,
     BioequivalenceAnalysisResponse,
 )
+from app.schemas.intelligence import RegulatoryEventBrief, RegulatoryEventSearchResult
 from app.services.bioequivalence import analyze_bioequivalence
 from app.sources.federation import FederatedSearchCoordinator, FederatedSearchResult
 from app.sources.registry import build_federated_coordinator
@@ -79,6 +100,20 @@ LabelSection = Literal[
     "instructions_for_use",
     "spl_medguide",
     "package_label_principal_display_panel",
+    # Composition. Prescription labels carry ingredients in spl_product_data_elements; OTC
+    # "Drug Facts" labels carry active_ingredient and inactive_ingredient. Without these the
+    # tool could not answer any composition question, which is how a paracetamol question
+    # ended with the false claim that FDA holds no inactive-ingredient data.
+    "active_ingredient",
+    "inactive_ingredient",
+    "spl_product_data_elements",
+    # OTC Drug Facts sections.
+    "purpose",
+    "warnings",
+    "do_not_use",
+    "ask_doctor",
+    "when_using",
+    "stop_use",
 ]
 SUPPORTED_LABEL_SECTIONS: frozenset[str] = frozenset(get_args(LabelSection))
 LABEL_SECTION_ALIASES: dict[str, str] = {
@@ -89,6 +124,14 @@ LABEL_SECTION_ALIASES: dict[str, str] = {
     "cmax": "pharmacokinetics",
     "tmax": "pharmacokinetics",
     "auc": "pharmacokinetics",
+    "active_ingredients": "active_ingredient",
+    "inactive_ingredients": "inactive_ingredient",
+    "excipients": "inactive_ingredient",
+    "excipient": "inactive_ingredient",
+    "ingredients": "spl_product_data_elements",
+    "composition": "spl_product_data_elements",
+    "formulation": "spl_product_data_elements",
+    "product_data": "spl_product_data_elements",
 }
 # Evidence lives in one corpus regardless of which source produced it, so the filter is a
 # plain source-dataset slug rather than an openFDA-only literal. Unknown slugs are
@@ -468,22 +511,34 @@ def create_internal_mcp_server(
     )
     async def ingest_openfda_query(
         dataset: OpenFDADataset,
-        search: str | None = None,
-        sort: str | None = None,
+        filters: Annotated[list[FDAFilter], Field(max_length=10)] | None = None,
+        combine: Literal["all", "any"] = "all",
+        sort_field: str | None = None,
+        sort_order: Literal["asc", "desc"] = "desc",
         limit: int = 5,
-    ) -> IngestionReceipt:
+    ) -> IngestionReceipt | FDAQueryRejection:
         """Fetch and durably ingest complete openFDA records without returning them to the LLM.
 
-        The raw response and records are compressed in content-addressed local storage. Stable
-        records are deduplicated, section-aware chunks are stored in PostgreSQL, and only a
-        compact ingestion receipt is returned. Requests are capped at 25 records. Follow with
-        search_ingested_evidence or read_ingested_document_chunks.
+        Describe the records with structured filters, exactly as for openfda_query; fields are
+        validated before anything is fetched. The raw response is stored, records are
+        deduplicated and chunked, and only a compact receipt is returned. Requests are capped
+        at 25 records. Follow with search_ingested_evidence or read_ingested_document_chunks.
         """
+        try:
+            compiled = compile_query(
+                dataset,
+                filters or [],
+                combine=combine,
+                sort_field=sort_field,
+                sort_order=sort_order,
+            )
+        except QueryValidationError as error:
+            return FDAQueryRejection(dataset=dataset, errors=error.errors)
         return await ingestion_coordinator.ingest_query(
             fda,
             dataset,
-            search=search,
-            sort=sort,
+            search=compiled.search,
+            sort=compiled.sort,
             limit=_bounded_int(limit, minimum=1, maximum=tool_limits.ingest_max_records),
         )
 
@@ -543,6 +598,54 @@ def create_internal_mcp_server(
         )
 
     @server.tool(
+        name="search_regulatory_events",
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    )
+    async def search_regulatory_events(
+        query: Annotated[str | None, Field(max_length=200)] = None,
+        days: int = 30,
+        min_significance: Significance = "low",
+        event_types: list[EventType] | None = None,
+        limit: int = 15,
+    ) -> RegulatoryEventSearchResult:
+        """Search regulatory changes detected by the monitor: approvals, label revisions,
+        manufacturing changes, REMS updates, and clinical-trial registrations, results, and
+        stoppages.
+
+        Use this for "what changed", "what's new", or "any recent news" questions about a drug,
+        company, or condition. Every event links to the official record it was detected from;
+        cite that link. Coverage begins when monitoring began, so an empty result means nothing
+        was detected in the window - not that nothing happened.
+        """
+        bounded_days = _bounded_int(days, minimum=1, maximum=365)
+        async with async_session_factory() as session:
+            events, _ = await list_events(
+                session,
+                min_significance=min_significance,
+                event_types=event_types or (),
+                query=query,
+                since=datetime.now(UTC).date() - timedelta(days=bounded_days),
+                limit=_bounded_int(limit, minimum=1, maximum=30),
+            )
+        caveats = [
+            "Events are detected by comparing successive snapshots of FDA and "
+            "ClinicalTrials.gov. Label revisions are only reported for labels observed at "
+            "least twice, so coverage of label changes grows over time.",
+        ]
+        if not events:
+            caveats.append(
+                "No matching change was detected in this window. Say so plainly, and use "
+                "search_all_sources if the user also wants current information."
+            )
+        return RegulatoryEventSearchResult(
+            query=query,
+            days=bounded_days,
+            returned=len(events),
+            events=[RegulatoryEventBrief.model_validate(event) for event in events],
+            caveats=caveats,
+        )
+
+    @server.tool(
         name="search_ingested_evidence",
         annotations={"readOnlyHint": True, "destructiveHint": False},
     )
@@ -592,29 +695,55 @@ def create_internal_mcp_server(
     )
     async def openfda_query(
         dataset: OpenFDADataset,
-        search: str | None = None,
-        count: str | None = None,
-        sort: str | None = None,
+        filters: Annotated[list[FDAFilter], Field(max_length=10)] | None = None,
+        combine: Literal["all", "any"] = "all",
+        count_field: str | None = None,
+        sort_field: str | None = None,
+        sort_order: Literal["asc", "desc"] = "desc",
         limit: int = 5,
         skip: int = 0,
     ) -> OpenFDAResult:
-        """Query an allowlisted openFDA dataset with native search, count, sort, and paging.
+        """Query any openFDA dataset with structured filters. Prefer a focused tool when one fits.
 
-        Use openFDA field syntax such as `field:"phrase"`, `field:[start TO end]`, `.exact`,
-        `AND`, and `*`. Prefer the focused tools for labels, FAERS summaries, and complete
-        response letters because they constrain very large records. Requests are capped at 10
-        records and skip is clamped to the supported 0-to-25000 range.
+        Describe the query as JSON; the application writes the openFDA syntax. Each filter
+        names a field, a match mode (contains, exact, range, exists), and a value or a
+        start/end. Fields are checked against openFDA's published catalogue before the request
+        is sent: an unknown field returns status "invalid_query" with suggested corrections and
+        is never evidence that data is absent. Brand and company fields usually live under
+        "openfda." (for example openfda.brand_name, openfda.manufacturer_name). Drug names are
+        searched under both international and US names. count_field returns value counts
+        instead of records. Requests are capped at 10 records; skip is clamped to 0-25000.
         """
+        try:
+            compiled = compile_query(
+                dataset,
+                filters or [],
+                combine=combine,
+                count_field=count_field,
+                sort_field=sort_field,
+                sort_order=sort_order,
+            )
+        except QueryValidationError as error:
+            return _rejected(fda, dataset, error.errors, limit=limit, skip=skip)
         result = await fda.query(
             dataset,
-            search=search,
-            count=count,
-            sort=sort,
+            search=compiled.search,
+            count=compiled.count,
+            sort=compiled.sort,
             limit=_bounded_int(limit, minimum=1, maximum=tool_limits.query_max_records),
             skip=_bounded_int(skip, minimum=0, maximum=OPENFDA_MAX_SKIP),
         )
+        caveats = [OPENFDA_GENERAL_CAVEAT, *compiled.notes]
+        if compiled.search:
+            caveats.append(f"Compiled openFDA search: {compiled.search}")
+        if result.returned == 0:
+            caveats.extend(
+                await _empty_result_diagnosis(
+                    fda, dataset, compiled.search, compiled.count, compiled.sort
+                )
+            )
         return _cap_openfda_result(
-            _with_caveats(result, [OPENFDA_GENERAL_CAVEAT]),
+            _with_caveats(result, caveats),
             tool_limits.result_max_characters,
         )
 
@@ -625,30 +754,42 @@ def create_internal_mcp_server(
     async def get_fda_drug_labels(
         drug_name: str,
         sections: list[str] | None = None,
+        manufacturer: Annotated[str | None, Field(max_length=200)] = None,
         limit: int = 3,
     ) -> OpenFDAResult:
-        """Retrieve selected sections and table text from up to 5 current FDA SPL drug labels.
+        """Retrieve selected sections from up to 5 current FDA drug labels, newest first.
 
-        Common sections include dosage_forms_and_strengths, clinical_pharmacology,
-        pharmacokinetics, clinical_studies, description, how_supplied, and storage_and_handling.
-        Unknown names are reported in the result instead of failing the whole assistant run.
+        drug_name may be a brand, generic, or international name (paracetamol is searched as
+        acetaminophen). Common sections include indications_and_usage, dosage_forms_and_strengths,
+        clinical_pharmacology, description, and how_supplied; for composition use
+        active_ingredient, inactive_ingredient, and spl_product_data_elements, or prefer
+        get_drug_composition. manufacturer filters by labeler, e.g. "Kenvue" or "Bayer".
+        Unknown section names are reported in the result instead of failing the run.
         """
         selected_sections, ignored_sections = _normalize_label_sections(sections)
+        names = search_names(drug_name)
+        clauses = [
+            _or_phrase(
+                ("openfda.generic_name", "openfda.brand_name", "openfda.substance_name"), name
+            )
+            for name in names
+        ]
+        search = " ".join(f"({clause})" for clause in clauses)
+        if manufacturer and manufacturer.strip():
+            search = f"({search}) AND {_phrase('openfda.manufacturer_name', manufacturer.strip())}"
         result = await fda.query(
             "drug/label",
-            search=_or_exact(
-                (
-                    "openfda.generic_name",
-                    "openfda.brand_name",
-                    "openfda.substance_name",
-                ),
-                drug_name,
-            ),
+            search=search,
             sort="effective_time:desc",
             limit=_bounded_int(limit, minimum=1, maximum=tool_limits.label_max_records),
         )
         projected = [_project_label(record, selected_sections) for record in result.results]
         caveats = [OPENFDA_GENERAL_CAVEAT]
+        if len(names) > 1:
+            caveats.append(
+                f"Searched {' and '.join(repr(name) for name in names)}: US labels use "
+                "United States Adopted Names, which differ from some international names."
+            )
         if ignored_sections:
             caveats.append(
                 "Unsupported requested label sections were ignored: "
@@ -660,38 +801,86 @@ def create_internal_mcp_server(
         )
 
     @server.tool(
+        name="get_drug_composition",
+        annotations={"readOnlyHint": True, "destructiveHint": False},
+    )
+    async def get_drug_composition(
+        drug: Annotated[str, Field(min_length=1, max_length=200)],
+        manufacturers: Annotated[list[str] | None, Field(max_length=8)] = None,
+        max_manufacturers: int = 5,
+        products_per_manufacturer: int = 2,
+    ) -> DrugCompositionResult:
+        """Active and inactive ingredients (excipients) of a drug's products, by manufacturer,
+        from current FDA labels.
+
+        Use this for any composition, ingredient, excipient, or formulation question. drug may
+        be a brand, generic, or international name. Omit manufacturers to get the top labelers
+        automatically - do not ask the user to choose them. Single-ingredient products are
+        listed first; is_combination marks products with other actives. Every product links to
+        its DailyMed label.
+        """
+        return await drug_composition(
+            fda,
+            drug,
+            manufacturers=manufacturers,
+            max_manufacturers=_bounded_int(max_manufacturers, minimum=1, maximum=8),
+            products_per_manufacturer=_bounded_int(
+                products_per_manufacturer, minimum=1, maximum=3
+            ),
+        )
+
+    @server.tool(
         name="analyze_fda_adverse_event_reactions",
         annotations={"readOnlyHint": True, "destructiveHint": False},
     )
     async def analyze_fda_adverse_event_reactions(
         drug_name: str,
         top_reactions: int = 10,
-        additional_search: str | None = None,
+        additional_filters: Annotated[list[FDAFilter], Field(max_length=5)] | None = None,
     ) -> OpenFDAResult:
         """Count the most frequently reported FAERS reactions for a named drug.
 
-        `additional_search` can add an openFDA constraint such as a received-date range or
-        seriousness field. Requests are capped at 25 reactions. Counts are reporting frequencies,
-        not incidence or causality.
+        additional_filters narrows the reports with structured drug/event filters, for example
+        {"field": "receivedate", "match": "range", "start": "2025-01-01", "end": "2025-12-31"}
+        or {"field": "serious", "match": "exact", "value": "1"}. Requests are capped at 25
+        reactions. Counts are reporting frequencies, not incidence or causality.
         """
-        search = _or_exact(
-            (
-                "patient.drug.openfda.generic_name",
-                "patient.drug.openfda.brand_name",
-                "patient.drug.openfda.substance_name",
-                "patient.drug.medicinalproduct",
-            ),
-            drug_name,
+        extra: str | None = None
+        if additional_filters:
+            try:
+                extra = compile_query("drug/event", additional_filters).search
+            except QueryValidationError as error:
+                return _rejected(fda, "drug/event", error.errors, limit=1, skip=0)
+        # Phrase rather than exact matching: exact matching on "TYLENOL" missed reports naming
+        # "TYLENOL EXTRA STRENGTH" and undercounted by about a third (158,947 vs 234,399 in
+        # September 2026). Both the given and international/US names are searched.
+        search = " ".join(
+            _or_phrase(
+                (
+                    "patient.drug.openfda.generic_name",
+                    "patient.drug.openfda.brand_name",
+                    "patient.drug.openfda.substance_name",
+                    "patient.drug.medicinalproduct",
+                ),
+                name,
+            )
+            for name in search_names(drug_name)
         )
-        if additional_search:
-            search = f"({search}) AND ({additional_search})"
+        if extra:
+            search = f"({search}) AND {extra}"
         result = await fda.query(
             "drug/event",
             search=search,
             count="patient.reaction.reactionmeddrapt.exact",
             limit=_bounded_int(top_reactions, minimum=1, maximum=tool_limits.faers_max_reactions),
         )
-        return _with_caveats(result, FAERS_CAVEATS)
+        return _with_caveats(
+            result,
+            [
+                *FAERS_CAVEATS,
+                "Counts include reports where the drug appears in a combination product.",
+            ],
+        )
 
     @server.tool(
         name="search_fda_drug_approvals",
@@ -822,12 +1011,69 @@ def get_internal_mcp_server() -> FastMCP[None]:
     settings = get_settings()
     fda = get_openfda_client()
     ingestion = get_fda_ingestion_coordinator()
+    pubmed = get_pubmed_client() if settings.pubmed_enabled else None
+    clinicaltrials = get_clinicaltrials_client() if settings.clinicaltrials_enabled else None
     return create_internal_mcp_server(
         fda,
         ingestion=ingestion,
         limits=OpenFDAToolLimits.from_settings(settings),
-        federation=build_federated_coordinator(fda, ingestion, settings),
+        federation=build_federated_coordinator(
+            fda, ingestion, settings, pubmed, clinicaltrials
+        ),
     )
+
+
+def _rejected(
+    fda: OpenFDAClient,
+    dataset: OpenFDADataset,
+    errors: list[str],
+    *,
+    limit: int,
+    skip: int,
+) -> OpenFDAResult:
+    """A query refused before sending, in the same shape as any other result."""
+    return OpenFDAResult(
+        query=OpenFDAQuery(dataset=dataset, limit=max(1, limit), skip=max(0, skip)),
+        total=None,
+        returned=0,
+        results=[],
+        provenance=FDAProvenance(
+            api_url=fda.endpoint_url(dataset),
+            retrieved_at=datetime.now(UTC),
+            disclaimer="This query was rejected before it was sent to openFDA.",
+        ),
+        caveats=[FDAQueryRejection.model_fields["hint"].default],
+        status="invalid_query",
+        errors=errors,
+    )
+
+
+async def _empty_result_diagnosis(
+    fda: OpenFDAClient,
+    dataset: OpenFDADataset,
+    search: str | None,
+    count: str | None,
+    sort: str | None,
+) -> list[str]:
+    """Explain an empty result, so it is never mistaken for a malformed query or vice versa.
+
+    Fields were validated against the vendored catalogue before sending. A live check still
+    runs, because openFDA can rename a field after the catalogue was generated.
+    """
+    fields = referenced_fields(search, count, sort)
+    missing = await fda.missing_fields(dataset, fields) if fields else {}
+    if missing:
+        return [
+            "QUERY ERROR, NOT AN ABSENCE OF DATA: openFDA no longer recognises "
+            f"{', '.join(missing)} in {dataset}; the field catalogue may be out of date "
+            "(run scripts.refresh_openfda_fields). Use a focused tool instead, and do not tell "
+            "the user the data does not exist."
+        ]
+    return [
+        "No records matched. Every field exists, so this is a genuine empty result for these "
+        "filters. Before concluding the data is absent, try a broader match (contains rather "
+        "than exact) or a focused tool."
+    ]
 
 
 def _escaped(value: str) -> str:
@@ -849,16 +1095,8 @@ def _bounded_int(value: int, *, minimum: int, maximum: int) -> int:
     return min(max(value, minimum), maximum)
 
 
-def _exact(field: str, value: str) -> str:
-    return f'{field}.exact:"{_escaped(value)}"'
-
-
 def _phrase(field: str, value: str) -> str:
     return f'{field}:"{_escaped(value)}"'
-
-
-def _or_exact(fields: tuple[str, ...], value: str) -> str:
-    return " ".join(_exact(field, value) for field in fields)
 
 
 def _or_phrase(fields: tuple[str, ...], value: str) -> str:

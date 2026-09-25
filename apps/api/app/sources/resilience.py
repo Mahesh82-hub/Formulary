@@ -18,6 +18,9 @@ import httpx
 Sleeper = Callable[[float], Awaitable[None]]
 Monotonic = Callable[[], float]
 Jitter = Callable[[float], float]
+# Lets a source veto a retry for a response whose status looks transient but is not. openFDA,
+# for example, answers a malformed query with HTTP 500, which no amount of retrying will fix.
+RetryPredicate = Callable[[httpx.Response], bool]
 
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
@@ -122,10 +125,12 @@ class ResilientRequester:
         rate_limiter: AsyncTokenBucket | None = None,
         sleep: Sleeper | None = None,
         jitter: Jitter | None = None,
+        retry_predicate: RetryPredicate | None = None,
     ) -> None:
         self._source_name = source_name
         self._policy = retry_policy or RetryPolicy()
         self._rate_limiter = rate_limiter
+        self._retry_predicate = retry_predicate
         self._sleep: Sleeper = sleep or asyncio.sleep
         self._jitter: Jitter = jitter or (lambda ceiling: random.uniform(0.0, ceiling))
 
@@ -156,6 +161,8 @@ class ResilientRequester:
                 continue
 
             if response.status_code not in self._policy.retry_statuses:
+                return response
+            if self._retry_predicate is not None and not self._retry_predicate(response):
                 return response
 
             last_response = response

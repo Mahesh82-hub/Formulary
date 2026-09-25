@@ -1,0 +1,80 @@
+{
+ "id": "chatcmpl-92b2fd26-6a0e-49f6-befb-7113d0940b32",
+ "choices": [
+  {
+   "message": {
+    "role": "assistant",
+    "content": "**Inactive (non\u2011active) ingredients in Tylenol\u202fExtra\u202fStrength\u202fCaplets**\n\n- Carnauba wax  \n- Corn starch (modified starch)  \n- FD\u202f&\u202fC Red No.\u202f40 aluminum lake (color)  \n- Hypromellose (coating agent)  \n- Magnesium stearate (lubricant)  \n- Polyethylene glycol (plasticizer)  \n- Powdered cellulose (microcrystalline cellulose)  \n- Pregelatinized starch  \n- Propylene glycol (solvent)  \n- Shellac (film former)  \n- Sodium starch glycolate (disintegrant)  \n- Titanium dioxide (colorant)  \n\nThese ingredients are listed on the FDA\u2011approved label for \u201cTYLENOL\u202fEXTRA\u202fSTRENGTH\u202fCAPLET\u201d in the DailyMed database\u30101\u2020L119-L125\u3011\u30101\u2020L140-L146\u3011.",
+    "executed_tools": [
+     {
+      "name": "browser.search",
+      "index": 0,
+      "type": "browser_search",
+      "arguments": "{\"query\": \"Tylenol Extra Strength caplet inactive ingredients\", \"topn\": 10, \"source\": \"news\"}",
+      "output": "L0: \nL1: URL: https://exa.ai/search?q=Tylenol+Extra+Strength+caplet+inactive+ingredients\nL2: # Search Results\nL3: \nL4: \\\\* \u30100\u2020TYLENOL EXTRA STRENGTH CAPLET- acetaminophen\nL5: tablet\u2020dailymed.nlm.nih.gov\u3011\nL6: \\\\* \u30101\u2020Extra Strength TYLENOL\u00ae for Headache, Pain & Fever\nL7: Relief\u2020www.tylenol.com\u3011\nL8: \\\\",
+      "search_results": {
+       "results": [
+        {
+         "title": "TYLENOL EXTRA STRENGTH CAPLET- acetaminophen tablet",
+         "url": "https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=fba711c1-4e69-49b0-8994-97c455aebcb2",
+         "content": "",
+         "score": 0
+        },
+        {
+         "title": "Extra Strength TYLENOL\u00ae for Headache, Pain & Fever Relief",
+         "url": "https://www.tylenol.com/products/headache-pain-relief/tylenol-extra-strength-caplets",
+         "content": "",
+         "score": 0
+        },
+        {
+         "title": "Tylenol Extra Strength",
+         "url": "https://dailymed.nlm.nih.gov/dailymed/fda/fdaDrugXsl.cfm?setid=fba711c1-4e69-49b0-8994-97c455aebcb2&type=display",
+         "content": "",
+         "score": 0
+        },
+        {
+         "title": "Tylenol \n \u00ae Extra Strength",
+         "url": "https://dailymed.nlm.nih.gov/dailymed/fda/fdaDrugXsl.cfm?setid=17cfa99d-abb2-4d77-9e0e-e77109fbb61a&type=display",
+         "content": "",
+         "score": 0
+        }
+       ]
+      }
+     },
+     {
+      "name": "browser.open",
+      "index": 1,
+      "type": "browser.open",
+      "arguments": "{\"cursor\": 0, \"id\": 0}",
+      "output": "L0: \nL1: URL:\nL2: https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=fba711c1-4e69-49b0-8994-97c455aebcb2\nL3: DailyMed - TYLENOL EXTRA STRENGTH CAPLET- acetaminophen tablet\nL4: \nL5: ## View Package Photos\nL6: \nL7: - Report Adverse Events\nL8: \nL9: - FDA Safety Recalls\nL10: \nL11: - Presence in B",
+      "search_results": {
+       "results": [
+        {
+         "title": "dailymed.nlm.nih.gov - viewing lines [0 - 172] of 172",
+         "url": "https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=fba711c1-4e69-49b0-8994-97c455aebcb2",
+         "content": "L0: \nL1: URL:\nL2: https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=fba711c1-4e69-49b0-8994-97c455aebcb2\nL3: Dail",
+         "score": 0
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "usage": {
+  "queue_time": 0.151905343,
+  "prompt_tokens": 4674,
+  "prompt_time": 0.421290678,
+  "completion_tokens": 280,
+  "completion_time": 0.745359784,
+  "total_tokens": 4954,
+  "total_time": 1.166650462,
+  "prompt_tokens_details": {
+   "cached_tokens": 256
+  },
+  "completion_tokens_details": {
+   "reasoning_tokens": 61
+  }
+ }
+}

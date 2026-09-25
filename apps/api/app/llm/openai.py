@@ -23,6 +23,7 @@ class OpenAIResponsesProvider(HTTPModelProvider):
         timeout_seconds: float,
         max_retries: int = 1,
         retry_base_delay_seconds: float = 0.25,
+        max_rate_limit_retries: int = 3,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         super().__init__(
@@ -31,6 +32,7 @@ class OpenAIResponsesProvider(HTTPModelProvider):
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             retry_base_delay_seconds=retry_base_delay_seconds,
+            max_rate_limit_retries=max_rate_limit_retries,
             transport=transport,
         )
 
@@ -43,6 +45,7 @@ class OpenAIResponsesProvider(HTTPModelProvider):
         tools: list[LLMToolDefinition],
         continuation: dict[str, object] | None = None,
         tool_outputs: list[LLMToolOutput] | None = None,
+        allow_web_search: bool = False,
     ) -> LLMCompletion:
         payload: dict[str, Any] = {
             "model": model,

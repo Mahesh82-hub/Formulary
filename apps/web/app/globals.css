@@ -16,6 +16,12 @@
   --chart-secondary: #a350d9;
   --danger: #b53b55;
   --shadow: 0 18px 60px rgb(67 22 119 / 9%);
+  --significance-high: #b53b55;
+  --significance-high-soft: #fbe9ed;
+  --significance-medium: #9a5a06;
+  --significance-medium-soft: #fdf1df;
+  --significance-low: #74687c;
+  --significance-low-soft: #f3eef6;
   color-scheme: light;
 }
 
@@ -35,6 +41,12 @@
   --chart-secondary: #e3a4f2;
   --danger: #f08a9e;
   --shadow: 0 18px 60px rgb(3 0 7 / 35%);
+  --significance-high: #f08a9e;
+  --significance-high-soft: #3b1822;
+  --significance-medium: #f0b566;
+  --significance-medium-soft: #372712;
+  --significance-low: #b4a6bc;
+  --significance-low-soft: #271b30;
   color-scheme: dark;
 }
 
@@ -422,4 +434,31 @@ button {
 
 .animate-pulse-soft {
   animation: pulse-soft 1.4s ease-in-out infinite;
+}
+
+.significance-high {
+  color: var(--significance-high);
+  background: var(--significance-high-soft);
+}
+
+.significance-medium {
+  color: var(--significance-medium);
+  background: var(--significance-medium-soft);
+}
+
+.significance-low {
+  color: var(--significance-low);
+  background: var(--significance-low-soft);
+}
+
+.significance-rail-high {
+  background: var(--significance-high);
+}
+
+.significance-rail-medium {
+  background: var(--significance-medium);
+}
+
+.significance-rail-low {
+  background: var(--border);
 }

@@ -8,10 +8,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.clinicaltrials.client import ClinicalTrialsClient
+from app.clinicaltrials.search import ClinicalTrialsSearcher
 from app.core.config import Settings
 from app.fda.client import OpenFDAClient
 from app.fda.search import build_openfda_searchers
 from app.ingestion.service import FDAIngestionCoordinator
+from app.pubmed.client import PubMedClient
+from app.pubmed.search import PubMedSearcher
 from app.sources.federation import (
     FederatedRecord,
     FederatedSearchCoordinator,
@@ -46,7 +50,7 @@ class IngestedEvidenceSearcher:
             records.append(
                 FederatedRecord(
                     source=self.name,
-                    title=f"{chunk.title} ({chunk.section_path})",
+                    title=f"{chunk.title} ({readable_section(chunk.section_path)})",
                     snippet=snippet,
                     url=chunk.source_url,
                     external_key=f"{chunk.dataset}:{chunk.external_key}:{chunk.chunk_index}",
@@ -65,11 +69,32 @@ class IngestedEvidenceSearcher:
         return records
 
 
+def readable_section(path: str) -> str:
+    """Turn a JSON path such as "$.pages[1].text" into "page 1"."""
+    import re
+
+    page = re.search(r"pages\[(\d+)\]", path)
+    if page:
+        return f"page {page.group(1)}"
+    cleaned = re.sub(r"^\$\.?", "", path).replace("_", " ").replace(".", " > ")
+    return cleaned or "document"
+
+
 def build_source_searchers(
     fda: OpenFDAClient,
     ingestion: FDAIngestionCoordinator | None = None,
+    pubmed: PubMedClient | None = None,
+    clinicaltrials: ClinicalTrialsClient | None = None,
 ) -> list[SourceSearcher]:
+    """Assemble every source a federated question is asked against.
+
+    Order carries no meaning: the coordinator queries them concurrently and merges by rank.
+    """
     searchers: list[SourceSearcher] = list(build_openfda_searchers(fda))
+    if pubmed is not None:
+        searchers.append(PubMedSearcher(pubmed))
+    if clinicaltrials is not None:
+        searchers.append(ClinicalTrialsSearcher(clinicaltrials))
     if ingestion is not None:
         searchers.append(IngestedEvidenceSearcher(ingestion))
     return searchers
@@ -79,9 +104,11 @@ def build_federated_coordinator(
     fda: OpenFDAClient,
     ingestion: FDAIngestionCoordinator | None,
     settings: Settings,
+    pubmed: PubMedClient | None = None,
+    clinicaltrials: ClinicalTrialsClient | None = None,
 ) -> FederatedSearchCoordinator:
     return FederatedSearchCoordinator(
-        build_source_searchers(fda, ingestion),
+        build_source_searchers(fda, ingestion, pubmed, clinicaltrials),
         per_source_timeout_seconds=settings.federated_per_source_timeout_seconds,
         per_source_limit=settings.federated_per_source_limit,
         rrf_k=settings.retrieval_rrf_k,

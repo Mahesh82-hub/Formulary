@@ -27,9 +27,20 @@ class LLMToolOutput(BaseModel):
     is_error: bool = False
 
 
+class WebSource(BaseModel):
+    """A web page the provider's built-in browsing actually opened or cited."""
+
+    title: str
+    url: str
+
+
 class LLMCompletion(BaseModel):
     provider_response_id: str
     text: str = ""
     tool_calls: list[LLMToolCall] = Field(default_factory=list)
     usage: dict[str, Any] = Field(default_factory=dict)
     continuation: dict[str, Any] = Field(default_factory=dict)
+    # Populated when a provider ran built-in web search during this completion.
+    web_queries: list[str] = Field(default_factory=list)
+    web_sources: list[WebSource] = Field(default_factory=list)
+    web_excerpts: list[str] = Field(default_factory=list)

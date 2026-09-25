@@ -92,6 +92,11 @@ pnpm build
 Integration tests require the Docker database. Durable ingestion, local BGE embedding segments,
 HNSW vector indexing, and hybrid PostgreSQL retrieval are implemented.
 
+How answers stay grounded - structured queries, citation guarantees, web search, and the
+live evaluation harness - is documented in [`docs/retrieval-quality.md`](docs/retrieval-quality.md).
+Regulatory intelligence - change detection across FDA and ClinicalTrials.gov, the News tab,
+and email/Slack watches - is documented in
+[`docs/regulatory-intelligence.md`](docs/regulatory-intelligence.md).
 The upstream transport layer shared by every evidence source - rate limiting, retry policy,
 and what it takes to add a new source - is documented in
 [`docs/upstream-sources.md`](docs/upstream-sources.md).

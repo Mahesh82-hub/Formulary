@@ -34,6 +34,7 @@ class LLMGateway:
         tools: list[LLMToolDefinition],
         continuation: dict[str, object] | None = None,
         tool_outputs: list[LLMToolOutput] | None = None,
+        allow_web_search: bool = False,
     ) -> LLMCompletion:
         return await self._provider(provider).complete(
             model=model,
@@ -42,6 +43,7 @@ class LLMGateway:
             tools=tools,
             continuation=continuation,
             tool_outputs=tool_outputs,
+            allow_web_search=allow_web_search,
         )
 
     def _provider(self, provider: ProviderName) -> LLMProvider:
@@ -65,6 +67,11 @@ class LLMGateway:
             timeout_seconds=self._settings.llm_request_timeout_seconds,
             max_retries=self._settings.llm_transient_max_retries,
             retry_base_delay_seconds=self._settings.llm_retry_base_delay_seconds,
+            web_search_models=(
+                self._settings.groq_web_search_models
+                if self._settings.groq_web_search_enabled
+                else frozenset()
+            ),
         )
 
 

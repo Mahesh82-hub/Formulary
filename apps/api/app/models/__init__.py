@@ -10,6 +10,13 @@ from app.models.ingestion import (
     DocumentVersion,
     IngestionJob,
 )
+from app.models.intelligence import (
+    MonitorRun,
+    RegulatoryEvent,
+    SourceSnapshot,
+    Watch,
+    WatchDelivery,
+)
 from app.models.run import AssistantRun, ToolExecution
 
 __all__ = [
@@ -23,8 +30,13 @@ __all__ = [
     "DocumentVersion",
     "IngestionJob",
     "Message",
+    "MonitorRun",
     "OTPChallenge",
+    "RegulatoryEvent",
+    "SourceSnapshot",
     "ToolExecution",
     "User",
     "UserSession",
+    "Watch",
+    "WatchDelivery",
 ]

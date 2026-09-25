@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select
 from app.db.session import async_session_factory
 from app.fda.client import OpenFDAClient
 from app.ingestion.chunking import LlamaIndexJSONChunker
-from app.ingestion.pdf import FDAPDFFetcher, PDFEvidenceExtractor, validate_fda_pdf_url
+from app.ingestion.pdf import DocumentFetcher, PDFEvidenceExtractor, validate_document_url
 from app.ingestion.service import FDAIngestionCoordinator
 from app.ingestion.storage import LocalObjectStorage
 from app.models import DataSource, Document, DocumentChunk, DocumentVersion, IngestionJob
@@ -128,9 +128,10 @@ async def test_fda_pdf_fetcher_enforces_host_and_size() -> None:
         assert request.url.host == "www.fda.gov"
         return httpx.Response(200, content=payload, headers={"content-type": "application/pdf"})
 
-    fetcher = FDAPDFFetcher(
+    fetcher = DocumentFetcher(
         timeout_seconds=10,
         max_bytes=len(payload) + 1,
+        allowed_hosts={"fda.gov"},
         transport=httpx.MockTransport(handler),
     )
     fetched, final_url = await fetcher.fetch("https://www.fda.gov/media/example/download")
@@ -138,7 +139,7 @@ async def test_fda_pdf_fetcher_enforces_host_and_size() -> None:
     assert fetched == payload
     assert final_url == "https://www.fda.gov/media/example/download"
     with pytest.raises(ValueError, match="fda.gov"):
-        validate_fda_pdf_url("https://example.com/document.pdf")
+        validate_document_url("https://example.com/document.pdf", allowed_hosts={"fda.gov"})
 
 
 def test_llamaindex_chunker_preserves_json_section_provenance() -> None:
@@ -308,3 +309,42 @@ async def test_openfda_ingestion_deduplicates_and_retrieves_chunks(tmp_path: Pat
                 if remaining == 0:
                     await session.delete(source)
             await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_document_fetcher_accepts_hosts_from_any_registered_source() -> None:
+    """A second source's documents must be fetchable without touching the pipeline."""
+    payload = _single_page_text_pdf("PubMed Central article text")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=payload, headers={"content-type": "application/pdf"})
+
+    fetcher = DocumentFetcher(
+        timeout_seconds=10,
+        max_bytes=len(payload) + 1,
+        allowed_hosts={"fda.gov", "ncbi.nlm.nih.gov"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    fetched, _ = await fetcher.fetch("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1/pdf")
+    assert fetched == payload
+
+
+def test_document_url_validation_rejects_lookalike_and_unsafe_hosts() -> None:
+    allowed = {"fda.gov"}
+
+    # A suffix that merely ends with the allowed string must not pass.
+    with pytest.raises(ValueError, match="fda.gov"):
+        validate_document_url("https://notfda.gov/doc.pdf", allowed_hosts=allowed)
+    # Plain HTTP is never acceptable.
+    with pytest.raises(ValueError, match="fda.gov"):
+        validate_document_url("http://www.fda.gov/doc.pdf", allowed_hosts=allowed)
+    # Embedded credentials are an SSRF smell.
+    with pytest.raises(ValueError, match="authority"):
+        validate_document_url("https://user:pw@www.fda.gov/doc.pdf", allowed_hosts=allowed)
+    # An empty allowlist fetches nothing rather than everything.
+    with pytest.raises(ValueError, match="no configured host"):
+        validate_document_url("https://www.fda.gov/doc.pdf", allowed_hosts=set())
+
+    # Subdomains of an allowed host are fine.
+    assert validate_document_url("https://www.fda.gov/doc.pdf", allowed_hosts=allowed)

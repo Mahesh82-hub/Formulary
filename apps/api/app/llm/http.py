@@ -1,4 +1,5 @@
 import asyncio
+import re
 from typing import Any, cast
 
 import httpx
@@ -15,6 +16,7 @@ class HTTPModelProvider:
         timeout_seconds: float,
         max_retries: int = 1,
         retry_base_delay_seconds: float = 0.25,
+        max_rate_limit_retries: int = 3,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = api_key
@@ -22,11 +24,14 @@ class HTTPModelProvider:
         self._timeout_seconds = timeout_seconds
         self._max_retries = max(0, max_retries)
         self._retry_base_delay_seconds = max(0.0, retry_base_delay_seconds)
+        self._max_rate_limit_retries = max(0, max_rate_limit_retries)
         self._transport = transport
 
     async def post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         response: httpx.Response | None = None
-        for attempt in range(self._max_retries + 1):
+        attempt = 0
+        rate_limited = 0
+        while True:
             try:
                 async with httpx.AsyncClient(
                     base_url=self._base_url,
@@ -40,6 +45,7 @@ class HTTPModelProvider:
             except httpx.TimeoutException as error:
                 if attempt < self._max_retries:
                     await self._retry_delay(attempt)
+                    attempt += 1
                     continue
                 raise LLMProviderError(
                     "The model provider timed out",
@@ -49,14 +55,22 @@ class HTTPModelProvider:
                 ) from error
             except httpx.HTTPStatusError as error:
                 status_code = error.response.status_code
-                retryable = status_code == 429 or status_code >= 500
-                if retryable and attempt < self._max_retries:
-                    await self._retry_delay(attempt)
+                # A rate limit says how long to wait, so it gets its own budget rather than
+                # the short transient backoff: waiting 0.25 s when the provider asked for 0.9 s
+                # simply failed the retry as well.
+                if status_code == 429 and rate_limited < self._max_rate_limit_retries:
+                    rate_limited += 1
+                    await asyncio.sleep(rate_limit_delay(error.response, rate_limited))
                     continue
-                raise self._http_status_error(error.response, attempt) from error
+                if status_code >= 500 and attempt < self._max_retries:
+                    await self._retry_delay(attempt)
+                    attempt += 1
+                    continue
+                raise self._http_status_error(error.response, attempt + rate_limited) from error
             except httpx.HTTPError as error:
                 if attempt < self._max_retries:
                     await self._retry_delay(attempt)
+                    attempt += 1
                     continue
                 raise LLMProviderError(
                     "The model provider could not be reached",
@@ -194,3 +208,27 @@ def json_object(value: object, *, field: str) -> dict[str, Any]:
             code="provider_invalid_response",
         )
     return cast(dict[str, Any], value)
+
+
+RATE_LIMIT_HINT = re.compile(r"try again in ([0-9.]+)\s*(ms|s)\b", re.IGNORECASE)
+MAX_RATE_LIMIT_DELAY_SECONDS = 30.0
+
+
+def rate_limit_delay(response: httpx.Response, attempt: int) -> float:
+    """How long a provider asked us to wait, from Retry-After or its error message."""
+    header = response.headers.get("retry-after")
+    delay: float | None = None
+    if header:
+        try:
+            delay = float(header)
+        except ValueError:
+            delay = None
+    if delay is None:
+        match = RATE_LIMIT_HINT.search(response.text or "")
+        if match:
+            value = float(match.group(1))
+            delay = value / 1000 if match.group(2).lower() == "ms" else value
+    if delay is None:
+        delay = float(2 ** (attempt - 1))
+    # A little headroom: the window resets at the stated instant, not before it.
+    return min(max(delay, 0.0) * 1.1 + 0.1, MAX_RATE_LIMIT_DELAY_SECONDS)

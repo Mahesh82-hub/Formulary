@@ -10,7 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from app.sources.resilience import AsyncTokenBucket, ResilientRequester, RetryPolicy
+from app.sources.resilience import (
+    AsyncTokenBucket,
+    ResilientRequester,
+    RetryPolicy,
+    RetryPredicate,
+)
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,8 @@ class SourceProfile:
     name: str
     rate_per_second: float
     burst: int
+    # Hosts this source vouches for when the ingestion pipeline fetches a document.
+    document_hosts: frozenset[str] = frozenset()
     max_attempts: int = 3
     base_delay_seconds: float = 0.5
     max_delay_seconds: float = 8.0
@@ -54,9 +61,12 @@ class SourceProfile:
             timeout_seconds=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
         )
 
-    def build_requester(self) -> ResilientRequester:
+    def build_requester(
+        self, *, retry_predicate: RetryPredicate | None = None
+    ) -> ResilientRequester:
         return ResilientRequester(
             source_name=self.name,
+            retry_predicate=retry_predicate,
             retry_policy=RetryPolicy(
                 max_attempts=self.max_attempts,
                 base_delay_seconds=self.base_delay_seconds,
@@ -75,11 +85,37 @@ OPENFDA_PROFILE = SourceProfile(
     name="openFDA",
     rate_per_second=3.0,
     burst=6,
+    document_hosts=frozenset({"fda.gov"}),
 )
 
-# Reference defaults for sources not yet implemented. Adding a source means declaring its
-# profile here and reusing ResilientRequester; no new transport code is required.
-#
-# NCBI E-utilities (PubMed): 3/s unkeyed, 10/s with an API key.
-# ClinicalTrials.gov v2: no published hard limit; 5/s is a courteous default.
-# RxNorm / DailyMed: 20/s published ceiling.
+# NCBI E-utilities allow 3 requests/second without an API key and 10 with one. The default
+# stays under the unkeyed ceiling; get_pubmed_client raises it when a key is configured.
+PUBMED_PROFILE = SourceProfile(
+    name="PubMed",
+    rate_per_second=2.5,
+    burst=3,
+    document_hosts=frozenset({"ncbi.nlm.nih.gov"}),
+)
+
+# ClinicalTrials.gov asks callers to stay near 50 requests per minute per IP (~0.83/s).
+CLINICALTRIALS_PROFILE = SourceProfile(
+    name="ClinicalTrials.gov",
+    rate_per_second=0.8,
+    burst=3,
+    document_hosts=frozenset({"clinicaltrials.gov", "cdn.clinicaltrials.gov"}),
+)
+
+
+REGISTERED_PROFILES: tuple[SourceProfile, ...] = (
+    OPENFDA_PROFILE,
+    PUBMED_PROFILE,
+    CLINICALTRIALS_PROFILE,
+)
+
+
+def registered_document_hosts() -> frozenset[str]:
+    """Every host a registered source vouches for, used as the document-fetch allowlist."""
+    hosts: set[str] = set()
+    for profile in REGISTERED_PROFILES:
+        hosts |= profile.document_hosts
+    return frozenset(hosts)

@@ -1,3 +1,5 @@
+import asyncio
+import re
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any, cast
@@ -7,6 +9,7 @@ import httpx
 from app.core.config import get_settings
 from app.fda.models import (
     OPENFDA_DATASETS,
+    OPENFDA_MAX_PAGE_SIZE,
     OPENFDA_MAX_SKIP,
     FDAProvenance,
     OpenFDADataset,
@@ -21,9 +24,47 @@ from app.sources.resilience import (
     UpstreamUnavailableError,
 )
 
+# A field reference is a dotted name followed by a colon, outside quoted values.
+_FIELD_REFERENCE = re.compile(r"(?<![\w.])([A-Za-z_]\w*(?:\.\w+)*)\s*:")
+_QUOTED = re.compile(r'"(?:\\.|[^"\\])*"')
+_EXISTENCE = re.compile(r"_(?:exists|missing)_\s*:\s*([A-Za-z_]\w*(?:\.\w+)*)")
+_PSEUDO_FIELDS = frozenset({"_exists_", "_missing_"})
+_FIELD_CACHE_LIMIT = 2_000
+
+
+def referenced_fields(*expressions: str | None) -> list[str]:
+    """Field names used in openFDA search, count, or sort expressions, without ``.exact``."""
+    fields: list[str] = []
+    for expression in expressions:
+        if not expression:
+            continue
+        unquoted = _QUOTED.sub('""', expression)
+        candidates = _FIELD_REFERENCE.findall(unquoted) + _EXISTENCE.findall(unquoted)
+        # Bare count and sort values are field names too, e.g. "effective_time:desc".
+        if ":" not in unquoted and re.fullmatch(r"[A-Za-z_][\w.]*", unquoted.strip()):
+            candidates.append(unquoted.strip())
+        for candidate in candidates:
+            name = candidate.removesuffix(".exact")
+            if name in _PSEUDO_FIELDS or name in fields:
+                continue
+            fields.append(name)
+    return fields
+
 
 class OpenFDAError(RuntimeError):
     """Safe application error raised for an unsuccessful openFDA request."""
+
+
+def openfda_should_retry(response: httpx.Response) -> bool:
+    """Refuse to retry openFDA's HTTP 500 for a malformed query.
+
+    openFDA reports a query parse failure as a 500 with a ``parse_exception`` body. The status
+    looks transient, but replaying the identical query can only fail again, and each attempt
+    spends shared rate budget.
+    """
+    if response.status_code != 500:
+        return True
+    return "parse_exception" not in response.text
 
 
 class OpenFDAClient:
@@ -44,7 +85,63 @@ class OpenFDAClient:
         self._timeout_seconds = timeout_seconds
         self._max_records = max_records
         self._transport = transport
-        self._requester = requester or OPENFDA_PROFILE.build_requester()
+        self._requester = requester or OPENFDA_PROFILE.build_requester(
+            retry_predicate=openfda_should_retry
+        )
+        self._field_exists: dict[tuple[str, str], bool] = {}
+
+    def with_max_records(self, max_records: int) -> "OpenFDAClient":
+        """Return a client allowing larger pages that shares this client's rate budget.
+
+        Background polling pages through hundreds of records, far beyond the cap that protects
+        the model's context. It must still draw on the same token bucket as interactive chat:
+        two independent buckets could together exceed openFDA's per-key limit.
+        """
+        if not 1 <= max_records <= OPENFDA_MAX_PAGE_SIZE:
+            raise ValueError(f"max_records must be between 1 and {OPENFDA_MAX_PAGE_SIZE}")
+        return OpenFDAClient(
+            api_key=self._api_key,
+            base_url=self._base_url,
+            timeout_seconds=self._timeout_seconds,
+            max_records=max_records,
+            transport=self._transport,
+            requester=self._requester,
+        )
+
+    def endpoint_url(self, dataset: OpenFDADataset) -> str:
+        return f"{self._base_url}/{dataset}.json"
+
+    async def missing_fields(
+        self, dataset: OpenFDADataset, fields: list[str]
+    ) -> dict[str, str | None]:
+        """Which fields do not exist in a dataset, each with a suggested replacement.
+
+        openFDA answers a query on a non-existent field with "No matches found" - the same
+        response as a real absence of data. Without this check a model that guesses a field
+        name concludes the data does not exist. Results are cached per dataset and field.
+        """
+        unknown = [field for field in fields if (dataset, field) not in self._field_exists]
+
+        async def probe(field: str) -> None:
+            try:
+                result = await self.query(dataset, search=f"_exists_:{field}", limit=1)
+            except OpenFDAError:
+                return
+            if len(self._field_exists) < _FIELD_CACHE_LIMIT:
+                self._field_exists[(dataset, field)] = bool(result.total)
+
+        await asyncio.gather(*(probe(field) for field in unknown))
+        missing = [
+            field for field in fields if self._field_exists.get((dataset, field)) is False
+        ]
+        suggestions = [f"openfda.{field}" for field in missing if not field.startswith("openfda.")]
+        await asyncio.gather(*(probe(field) for field in suggestions))
+        return {
+            field: f"openfda.{field}"
+            if self._field_exists.get((dataset, f"openfda.{field}"))
+            else None
+            for field in missing
+        }
 
     async def query(
         self,
@@ -235,5 +332,5 @@ def get_openfda_client() -> OpenFDAClient:
         timeout_seconds=settings.openfda_timeout_seconds,
         max_records=settings.openfda_tool_max_records,
         # The requester holds the shared token bucket, so it must outlive individual calls.
-        requester=profile.build_requester(),
+        requester=profile.build_requester(retry_predicate=openfda_should_retry),
     )

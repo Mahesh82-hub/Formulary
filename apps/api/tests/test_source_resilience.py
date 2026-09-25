@@ -236,3 +236,11 @@ def test_source_profile_builds_an_independent_requester_per_source() -> None:
     pubmed = SourceProfile(name="PubMed", rate_per_second=3.0, burst=3)
 
     assert pubmed.build_requester() is not OPENFDA_PROFILE.build_requester()
+
+
+def test_document_allowlist_is_the_union_of_registered_source_hosts() -> None:
+    from app.sources.profile import registered_document_hosts
+
+    hosts = registered_document_hosts()
+
+    assert {"fda.gov", "ncbi.nlm.nih.gov", "clinicaltrials.gov"} <= hosts

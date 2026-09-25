@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -24,7 +25,7 @@ from app.ingestion.models import (
     IngestionReceipt,
     PDFIngestionReceipt,
 )
-from app.ingestion.pdf import FDAPDFFetcher, OCRMode, PDFEvidenceExtractor
+from app.ingestion.pdf import DocumentFetcher, OCRMode, PDFEvidenceExtractor
 from app.ingestion.storage import LocalObjectStorage
 from app.models import (
     DataSource,
@@ -35,6 +36,7 @@ from app.models import (
     IngestionJob,
 )
 from app.sources.fusion import DEFAULT_RRF_K, reciprocal_rank_score
+from app.sources.profile import registered_document_hosts
 
 logger = logging.getLogger(__name__)
 EmbeddingStatus = Literal["completed", "partial", "failed", "skipped"]
@@ -60,8 +62,9 @@ class FDAIngestionCoordinator:
         max_search_chunks: int,
         rrf_k: int = DEFAULT_RRF_K,
         candidate_multiplier: int = 4,
+        max_vector_distance: float | None = None,
         embedder: EmbeddingProvider | None = None,
-        pdf_fetcher: FDAPDFFetcher | None = None,
+        pdf_fetcher: DocumentFetcher | None = None,
         pdf_extractor: PDFEvidenceExtractor | None = None,
     ) -> None:
         self._storage = storage
@@ -70,6 +73,7 @@ class FDAIngestionCoordinator:
         self._max_search_chunks = max_search_chunks
         self._rrf_k = rrf_k
         self._candidate_multiplier = candidate_multiplier
+        self._max_vector_distance = max_vector_distance
         self._embedder = embedder
         self._pdf_fetcher = pdf_fetcher
         self._pdf_extractor = pdf_extractor
@@ -259,6 +263,17 @@ class FDAIngestionCoordinator:
                             DocumentChunkEmbedding.model_revision
                             == self._embedder.model_revision,
                         )
+                    )
+                    if self._max_vector_distance is not None:
+                        # Nearest-neighbour search always returns something; without a floor
+                        # a one-document corpus returned an FDA guidance on mold in cherry
+                        # jam as "evidence" for four unrelated drug questions.
+                        vector_statement = vector_statement.where(
+                            DocumentChunkEmbedding.embedding.cosine_distance(query_embedding)
+                            <= self._max_vector_distance
+                        )
+                    vector_statement = (
+                        vector_statement
                         .order_by(distance, DocumentChunkEmbedding.id)
                         .limit(candidate_limit)
                     )
@@ -594,7 +609,7 @@ class FDAIngestionCoordinator:
             extension="pdf",
         )
         external_key = f"url-sha256:{hashlib.sha256(source_url.encode('utf-8')).hexdigest()}"
-        document_title = (title or source_url.rsplit("/", 1)[-1] or "FDA PDF")[:500]
+        document_title = pdf_title(title, source_url, extracted.sections)
         extracted_character_count = sum(
             len(str(section.get("content", ""))) for section in extracted.sections
         )
@@ -1046,13 +1061,37 @@ def get_fda_ingestion_coordinator() -> FDAIngestionCoordinator:
         max_search_chunks=settings.ingestion_search_max_chunks,
         rrf_k=settings.retrieval_rrf_k,
         candidate_multiplier=settings.retrieval_candidate_multiplier,
+        max_vector_distance=settings.retrieval_max_vector_distance,
         embedder=embedder,
-        pdf_fetcher=FDAPDFFetcher(
+        pdf_fetcher=DocumentFetcher(
             timeout_seconds=settings.fda_pdf_timeout_seconds,
             max_bytes=settings.fda_pdf_max_bytes,
+            allowed_hosts=settings.document_allowed_hosts or registered_document_hosts(),
         ),
         pdf_extractor=PDFEvidenceExtractor(
             native_text_min_characters=settings.pdf_native_text_min_characters,
             ocr_dpi=settings.pdf_ocr_dpi,
         ),
     )
+
+
+GENERIC_URL_SLUGS = frozenset({"download", "view", "index", "file", "pdf", "document", "media"})
+
+
+def pdf_title(title: str | None, source_url: str, sections: list[dict[str, Any]]) -> str:
+    """A reader-facing title for an ingested PDF.
+
+    FDA serves many documents from URLs ending in ".../download", which previously became
+    the title and then appeared in answers as a source named "download".
+    """
+    if title and title.strip():
+        return " ".join(title.split())[:500]
+    for section in sections[:3]:
+        for line in str(section.get("content", "")).splitlines():
+            cleaned = " ".join(line.split())
+            if len(cleaned) >= 8 and not re.fullmatch(r"\[page \d+\]", cleaned, re.I):
+                return cleaned[:200]
+    slug = source_url.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
+    if slug and slug.casefold() not in GENERIC_URL_SLUGS:
+        return slug[:200]
+    return "FDA document"

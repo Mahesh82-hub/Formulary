@@ -7,6 +7,7 @@ import {
   LogOut,
   MessageSquareText,
   MoreHorizontal,
+  Newspaper,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -14,6 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { BrandMark } from "@/components/brand-mark";
@@ -104,6 +106,17 @@ export function Sidebar({
             <Plus className="size-4 shrink-0 text-[#c987ee]" strokeWidth={2} />
             <span className={cn(collapsed && "lg:hidden")}>New conversation</span>
           </button>
+          <Link
+            href="/news"
+            className={cn(
+              "focus-ring mt-2 flex h-10 w-full items-center gap-2.5 rounded-xl px-3.5 text-left text-[12px] font-medium text-white/70 transition-all duration-200 hover:bg-white/[0.07] hover:text-white",
+              collapsed && "lg:justify-center lg:px-0",
+            )}
+            title="Regulatory news"
+          >
+            <Newspaper className="size-4 shrink-0 text-[#c987ee]" strokeWidth={2} />
+            <span className={cn(collapsed && "lg:hidden")}>Regulatory news</span>
+          </Link>
 
           <div className={cn("relative mt-3", collapsed && "lg:hidden")}>
             <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-white/40" />

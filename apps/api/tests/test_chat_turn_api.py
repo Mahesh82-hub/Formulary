@@ -1,5 +1,6 @@
+import asyncio
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,6 +13,7 @@ from app.llm.gateway import get_llm_gateway
 from app.llm.models import LLMCompletion, LLMToolCall
 from app.llm.provider import LLMProviderError
 from app.main import app
+from app.mcp_gateway.client import get_mcp_tool_client
 from app.models import AssistantRun, Conversation, Message, ToolExecution, User
 
 
@@ -664,9 +666,7 @@ async def test_chat_turn_asks_for_simulation_context_before_research() -> None:
             )
             assert assistant_message is not None
             clarification = next(
-                block
-                for block in assistant_message.content
-                if block.get("type") == "clarification"
+                block for block in assistant_message.content if block.get("type") == "clarification"
             )
             assert clarification["status"] == "awaiting_user"
             assert clarification["questions"][0]["question_id"] == "research_objective"
@@ -778,3 +778,232 @@ async def test_normal_chat_supports_sequential_interactive_questions() -> None:
         async with async_session_factory() as session:
             await session.execute(delete(User).where(User.id == user.id))
             await session.commit()
+
+
+class ScriptedParallelToolGateway:
+    """Requests three tools in one turn, the way providers actually batch them."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def validate_selection(self, provider: str, model: str) -> None: ...
+
+    async def complete(self, **_: Any) -> LLMCompletion:
+        self.call_count += 1
+        if self.call_count == 1:
+            return LLMCompletion(
+                provider_response_id="provider-parallel",
+                tool_calls=[
+                    LLMToolCall(
+                        id=f"parallel-call-{index}",
+                        name="convert_mass",
+                        arguments={"value": index * 1000, "from_unit": "mcg", "to_unit": "mg"},
+                    )
+                    for index in range(1, 4)
+                ],
+                continuation={"test": "parallel"},
+            )
+        return LLMCompletion(
+            provider_response_id="provider-parallel-final",
+            text="All three conversions are complete.",
+        )
+
+
+class DelayingToolClient:
+    """Delegates to the real tool client, adding latency and recording overlap."""
+
+    def __init__(self, inner: Any, delay: float) -> None:
+        self._inner = inner
+        self._delay = delay
+        self._active = 0
+        self.concurrent_peak = 0
+
+    async def list_tools(self) -> Any:
+        return await self._inner.list_tools()
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        self._active += 1
+        self.concurrent_peak = max(self.concurrent_peak, self._active)
+        try:
+            await asyncio.sleep(self._delay)
+            return await self._inner.call_tool(name, arguments)
+        finally:
+            self._active -= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_tool_calls_in_one_turn_execute_concurrently() -> None:
+    """Several tools requested in one turn must overlap rather than queue."""
+    async with async_session_factory() as session:
+        user = User(email=f"parallel-{uuid4()}@example.com")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+    delay = 0.25
+    delaying = DelayingToolClient(get_mcp_tool_client(), delay)
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_llm_gateway] = lambda: ScriptedParallelToolGateway()
+    app.dependency_overrides[get_mcp_tool_client] = lambda: delaying
+    conversation_id: str | None = None
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            created = await client.post("/api/v1/conversations", json={})
+            conversation_id = created.json()["id"]
+
+            started = asyncio.get_running_loop().time()
+            response = await client.post(
+                f"/api/v1/conversations/{conversation_id}/turns",
+                json={
+                    "text": "Convert three values",
+                    "provider": "groq",
+                    "model": "test-model",
+                },
+            )
+            body = response.text
+            elapsed = asyncio.get_running_loop().time() - started
+
+        assert response.status_code == 200
+        assert body.count("event: tool.completed") == 3
+    finally:
+        app.dependency_overrides.clear()
+        if conversation_id is not None:
+            async with async_session_factory() as session:
+                await session.execute(
+                    delete(Conversation).where(Conversation.id == UUID(conversation_id))
+                )
+                await session.execute(delete(User).where(User.id == user.id))
+                await session.commit()
+
+    assert delaying.concurrent_peak == 3, "tool calls did not overlap"
+    # Sequential execution would cost at least three delays.
+    assert elapsed < delay * 2.5
+
+
+class ScriptedEmptyFinalResponseGateway:
+    """Researches, then returns an empty message - the intermittent GPT-OSS failure."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def validate_selection(self, provider: str, model: str) -> None: ...
+
+    async def complete(self, **kwargs: Any) -> LLMCompletion:
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            return LLMCompletion(
+                provider_response_id="empty-1",
+                tool_calls=[
+                    LLMToolCall(
+                        id="empty-call",
+                        name="convert_mass",
+                        arguments={"value": 2500, "from_unit": "mcg", "to_unit": "mg"},
+                    )
+                ],
+                continuation={"test": "empty"},
+            )
+        if kwargs.get("tools"):
+            return LLMCompletion(provider_response_id="empty-2", text="")
+        return LLMCompletion(
+            provider_response_id="empty-synthesis", text="2500 micrograms is 2.5 milligrams."
+        )
+
+
+class ScriptedRepeatingToolGateway:
+    """Keeps calling one broad tool with reworded arguments."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def validate_selection(self, provider: str, model: str) -> None: ...
+
+    async def complete(self, **_: Any) -> LLMCompletion:
+        self.call_count += 1
+        if self.call_count == 1:
+            return LLMCompletion(
+                provider_response_id="repeat-1",
+                tool_calls=[
+                    LLMToolCall(
+                        id=f"repeat-{index}",
+                        name="convert_mass",
+                        arguments={"value": 1000 * index, "from_unit": "mcg", "to_unit": "mg"},
+                    )
+                    for index in range(1, 5)
+                ],
+                continuation={"test": "repeat"},
+            )
+        return LLMCompletion(provider_response_id="repeat-final", text="Converted the values.")
+
+
+async def _turn(gateway: Any, text: str) -> tuple[str, AssistantRun, list[ToolExecution]]:
+    async with async_session_factory() as session:
+        user = User(email=f"resilience-{uuid4()}@example.com")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_llm_gateway] = lambda: gateway
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            created = await client.post("/api/v1/conversations", json={})
+            conversation_id = created.json()["id"]
+            response = await client.post(
+                f"/api/v1/conversations/{conversation_id}/turns",
+                json={"text": text, "provider": "groq", "model": "test-model"},
+            )
+        async with async_session_factory() as session:
+            run = await session.scalar(
+                select(AssistantRun).where(AssistantRun.conversation_id == UUID(conversation_id))
+            )
+            assert run is not None
+            executions = list(
+                await session.scalars(select(ToolExecution).where(ToolExecution.run_id == run.id))
+            )
+        return response.text, run, executions
+    finally:
+        app.dependency_overrides.clear()
+        async with async_session_factory() as session:
+            await session.execute(delete(User).where(User.id == user.id))
+            await session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_an_empty_final_response_is_rewritten_from_collected_evidence() -> None:
+    gateway = ScriptedEmptyFinalResponseGateway()
+
+    body, run, _ = await _turn(gateway, "Convert 2500 mcg to mg")
+
+    assert run.status == "completed"
+    assert run.orchestration_state.get("empty_response_recovered") is True
+    assert "2.5 milligrams" in body
+    assert "event: run.failed" not in body
+    # The recovery attempt had tools disabled, so it could not start new research.
+    assert gateway.calls[-1]["tools"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_repeated_calls_to_a_capped_tool_are_refused_with_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import chat_orchestrator
+
+    monkeypatch.setattr(chat_orchestrator, "TOOL_REPEAT_LIMITS", {"convert_mass": 2})
+
+    _, run, executions = await _turn(ScriptedRepeatingToolGateway(), "Convert four values")
+
+    suppressed = [
+        execution
+        for execution in executions
+        if (execution.result or {}).get("audit", {}).get("suppression_reason")
+        == "tool_repeat_limit"
+    ]
+    assert run.status == "completed"
+    assert len(executions) == 4
+    assert len(suppressed) == 2
+    assert suppressed[0].result is not None
+    assert "already been used 2 times" in suppressed[0].result["data"]["message"]

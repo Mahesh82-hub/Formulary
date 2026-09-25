@@ -127,7 +127,7 @@ export function MessageList({
                       ) : (
                         <X className="size-3 text-[var(--danger)]" />
                       )}
-                      {activity.status === "running" ? "Using" : "Used"} {activity.name}
+                      {activity.status === "running" ? "Using" : "Used"} {toolLabel(activity.name)}
                     </div>
                   ))}
                 </div>
@@ -300,4 +300,27 @@ function isClarificationBlock(
     block.status === "awaiting_user" &&
     Array.isArray(block.questions)
   );
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  search_all_sources: "every source",
+  get_drug_composition: "FDA label ingredients",
+  get_fda_drug_labels: "FDA drug labels",
+  openfda_query: "openFDA",
+  search_regulatory_events: "detected regulatory changes",
+  analyze_fda_adverse_event_reactions: "FDA adverse-event reports",
+  search_fda_drug_approvals: "Drugs@FDA approvals",
+  search_fda_drug_shortages: "FDA drug shortages",
+  search_fda_drug_recalls: "FDA recalls",
+  search_fda_complete_response_letters: "FDA complete response letters",
+  search_ingested_evidence: "previously retrieved evidence",
+  read_ingested_document_chunks: "a retrieved document",
+  ingest_openfda_query: "openFDA (full records)",
+  ingest_fda_pdf_document: "an FDA PDF",
+  request_user_clarification: "a clarifying question",
+  web_search: "web search",
+};
+
+function toolLabel(name: string) {
+  return TOOL_LABELS[name] ?? name.replaceAll("_", " ");
 }

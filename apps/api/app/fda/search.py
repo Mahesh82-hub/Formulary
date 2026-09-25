@@ -12,6 +12,7 @@ from typing import Any
 
 from app.fda.client import OpenFDAClient, OpenFDAError
 from app.fda.models import OpenFDADataset
+from app.fda.names import rewrite_words
 from app.sources.federation import FederatedRecord
 
 # Datasets searched for a general question, with the fields that best serve as a title and a
@@ -100,7 +101,8 @@ class OpenFDADatasetSearcher:
                     source=self.name,
                     title=self._title(record, index),
                     snippet=self._snippet(record),
-                    url=result.provenance.api_url,
+                    # Link the human-readable record, not the API query that found it.
+                    url=_record_url(record, self._dataset) or result.provenance.api_url,
                     external_key=_external_key(record, self._dataset, index),
                     provenance=result.provenance,
                 )
@@ -112,7 +114,13 @@ class OpenFDADatasetSearcher:
             value = _first_text(_traverse(record, field))
             if value:
                 return f"{self.name}: {value}"
-        return f"{self.name} record {index + 1}"
+        # Many labels lack the harmonised openfda block; their product data still names the
+        # product, which beats an anonymous "record 1".
+        product = _first_text(record.get("spl_product_data_elements"))
+        if product:
+            return f"{self.name}: {' '.join(product.split()[:6])}"
+        key = _external_key(record, self._dataset, index)
+        return f"{self.name} {key.split(':', 1)[-1]}"
 
     def _snippet(self, record: dict[str, Any]) -> str:
         parts: list[str] = []
@@ -141,19 +149,153 @@ def build_openfda_searchers(client: OpenFDAClient) -> list[OpenFDADatasetSearche
     ]
 
 
+# Words that describe what the user wants to know rather than what a record must contain.
+# Requiring them would reject relevant records ("composition" appears in almost no label),
+# and allowing them to match alone admits irrelevant ones.
+QUERY_STOPWORDS = frozenset(
+    {
+        "a",
+        "about",
+        "adverse",
+        "among",
+        "an",
+        "and",
+        "any",
+        "approval",
+        "approvals",
+        "approved",
+        "are",
+        "between",
+        "brand",
+        "brands",
+        "by",
+        "can",
+        "change",
+        "changed",
+        "changes",
+        "companies",
+        "company",
+        "compare",
+        "comparison",
+        "composition",
+        "compositions",
+        "could",
+        "data",
+        "details",
+        "do",
+        "does",
+        "effect",
+        "effects",
+        "event",
+        "events",
+        "excipient",
+        "excipients",
+        "fda",
+        "few",
+        "find",
+        "for",
+        "formulation",
+        "from",
+        "get",
+        "give",
+        "how",
+        "i",
+        "in",
+        "inactive",
+        "indication",
+        "indications",
+        "info",
+        "information",
+        "ingredient",
+        "ingredients",
+        "is",
+        "it",
+        "label",
+        "labeling",
+        "labels",
+        "latest",
+        "list",
+        "manufacturer",
+        "manufacturers",
+        "me",
+        "most",
+        "new",
+        "news",
+        "of",
+        "on",
+        "or",
+        "please",
+        "product",
+        "products",
+        "reaction",
+        "reactions",
+        "recall",
+        "recalled",
+        "recalls",
+        "recent",
+        "shortage",
+        "shortages",
+        "should",
+        "show",
+        "side",
+        "some",
+        "studies",
+        "study",
+        "tell",
+        "than",
+        "that",
+        "the",
+        "their",
+        "these",
+        "this",
+        "those",
+        "to",
+        "top",
+        "trial",
+        "trials",
+        "update",
+        "updates",
+        "us",
+        "usa",
+        "used",
+        "versus",
+        "vs",
+        "warning",
+        "warnings",
+        "we",
+        "what",
+        "which",
+        "who",
+        "with",
+        "would",
+        "you",
+    }
+)
+
+
 def _free_text_expression(query: str) -> str:
     """Build a safe openFDA full-text expression from a user question.
 
-    openFDA searches across all fields when no field is named. Reserved characters are stripped
-    rather than escaped because a malformed expression fails the whole dataset query, and a
-    slightly broader match is a better outcome than a lost source.
+    Terms are joined with AND. openFDA treats space-separated terms as OR, so the previous
+    expression matched records containing any single word: "Pfizer paracetamol composition"
+    returned 16 Pfizer complete response letters that had nothing to do with paracetamol.
+    Filler words are dropped and international drug names are searched by their US names.
+
+    Reserved characters are stripped rather than escaped because a malformed expression fails
+    the whole dataset query, and a slightly broader match is a better outcome than a lost source.
     """
     reserved = set('":()[]{}\\/+-!^~*?')
     cleaned = "".join(" " if character in reserved else character for character in query)
-    terms = [term for term in cleaned.split() if term.upper() not in {"AND", "OR", "NOT"}]
+    terms: list[str] = []
+    for word in rewrite_words(cleaned).split():
+        if word.upper() in {"AND", "OR", "NOT"} or word.casefold() in QUERY_STOPWORDS:
+            continue
+        if len(word) < 2 or word.casefold() in {term.casefold() for term in terms}:
+            continue
+        terms.append(word)
     if not terms:
         return '""'
-    return " ".join(f'"{term}"' for term in terms[:12])
+    return " AND ".join(f'"{term}"' for term in terms[:8])
 
 
 def _traverse(record: dict[str, Any], path: str) -> Any:
@@ -188,3 +330,18 @@ def _external_key(record: dict[str, Any], dataset: str, index: int) -> str:
         if value:
             return f"{dataset}:{value}"
     return f"{dataset}:{index}"
+
+
+def _record_url(record: dict[str, Any], dataset: str) -> str | None:
+    """The public page for a record, when the dataset has one."""
+    set_id = record.get("set_id")
+    if dataset == "drug/label" and isinstance(set_id, str):
+        return f"https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid={set_id}"
+    application = record.get("application_number")
+    if dataset == "drug/drugsfda" and isinstance(application, str):
+        digits = "".join(character for character in application if character.isdigit())
+        return (
+            "https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm"
+            f"?event=overview.process&ApplNo={digits}"
+        )
+    return None

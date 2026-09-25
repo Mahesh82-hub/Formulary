@@ -29,10 +29,12 @@ async def test_fastmcp_client_discovers_and_calls_internal_tool() -> None:
         "ingest_openfda_query",
         "ingest_fda_pdf_document",
         "search_all_sources",
+        "search_regulatory_events",
         "search_ingested_evidence",
         "read_ingested_document_chunks",
         "openfda_query",
         "get_fda_drug_labels",
+        "get_drug_composition",
         "analyze_fda_adverse_event_reactions",
         "search_fda_drug_approvals",
         "search_fda_drug_shortages",
@@ -308,7 +310,10 @@ async def test_fda_label_tool_uses_focused_query_and_projects_sections() -> None
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/drug/label.json"
         search = request.url.params["search"]
-        assert 'openfda.generic_name.exact:"aspirin"' in search
+        # Phrase, not exact: exact matching on "TYLENOL" found 0 labels where the phrase found
+        # 111, because brand names such as "TYLENOL Extra Strength" are longer than the query.
+        assert 'openfda.generic_name:"aspirin"' in search
+        assert ".exact" not in search
         return httpx.Response(
             200,
             json={
@@ -391,7 +396,11 @@ async def test_openfda_tool_compacts_records_that_exceed_llm_payload_boundary() 
 
     result = await client.call_tool(
         "openfda_query",
-        {"dataset": "drug/label", "search": "metformin", "limit": 1},
+        {
+            "dataset": "drug/label",
+            "filters": [{"field": "openfda.generic_name", "value": "metformin"}],
+            "limit": 1,
+        },
     )
 
     serialized = json.dumps(result.data)
@@ -480,3 +489,150 @@ async def test_tool_limits_are_derived_from_settings() -> None:
 
     assert limits.label_max_records == 4
     assert limits.query_max_records == 7
+
+
+@pytest.mark.asyncio
+async def test_label_tool_searches_international_and_us_names_with_a_manufacturer() -> None:
+    searches: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        searches.append(request.url.params["search"])
+        return httpx.Response(200, json={"meta": {"results": {"total": 0}}, "results": []})
+
+    fda = OpenFDAClient(
+        api_key=None,
+        base_url="https://api.fda.test",
+        timeout_seconds=10,
+        max_records=25,
+        transport=httpx.MockTransport(handler),
+    )
+    client = FastMCPToolClient(create_internal_mcp_server(fda))
+
+    result = await client.call_tool(
+        "get_fda_drug_labels",
+        {
+            "drug_name": "paracetamol",
+            "manufacturer": "Kenvue",
+            "sections": ["inactive_ingredients", "excipients", "composition"],
+        },
+    )
+
+    search = searches[0]
+    assert '"paracetamol"' in search and '"acetaminophen"' in search
+    assert 'openfda.manufacturer_name:"Kenvue"' in search
+    # Plural and colloquial section names map onto the real openFDA fields.
+    assert result.data["caveats"] and not any(
+        "Unsupported" in caveat for caveat in result.data["caveats"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_openfda_query_rejects_unknown_fields_before_sending_anything() -> None:
+    """The failure that motivated structured queries: guessed fields must never reach openFDA."""
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(str(request.url))
+        return httpx.Response(200, json={"meta": {"results": {"total": 0}}, "results": []})
+
+    fda = OpenFDAClient(
+        api_key=None,
+        base_url="https://api.fda.test",
+        timeout_seconds=10,
+        max_records=25,
+        transport=httpx.MockTransport(handler),
+    )
+    client = FastMCPToolClient(create_internal_mcp_server(fda))
+
+    result = await client.call_tool(
+        "openfda_query",
+        {
+            "dataset": "drug/label",
+            "filters": [
+                {"field": "labeler_name", "value": "BAYER"},
+                {"field": "active_ingredients.name", "value": "ACETAMINOPHEN"},
+            ],
+        },
+    )
+
+    assert sent == []
+    assert result.data["status"] == "invalid_query"
+    assert any("openfda.manufacturer_name" in error for error in result.data["errors"])
+    assert any("active_ingredient" in error for error in result.data["errors"])
+    assert "not evidence that the data does not exist" in result.data["caveats"][0]
+
+
+@pytest.mark.asyncio
+async def test_structured_filters_compile_to_valid_openfda_syntax() -> None:
+    searches: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        searches.append(dict(request.url.params))
+        return httpx.Response(
+            200, json={"meta": {"results": {"total": 1}}, "results": [{"id": "label-1"}]}
+        )
+
+    fda = OpenFDAClient(
+        api_key=None,
+        base_url="https://api.fda.test",
+        timeout_seconds=10,
+        max_records=25,
+        transport=httpx.MockTransport(handler),
+    )
+    client = FastMCPToolClient(create_internal_mcp_server(fda))
+
+    result = await client.call_tool(
+        "openfda_query",
+        {
+            "dataset": "drug/label",
+            "filters": [
+                {"field": "openfda.generic_name", "value": "paracetamol"},
+                {"field": "openfda.manufacturer_name", "value": "Bayer"},
+                {
+                    "field": "effective_time",
+                    "match": "range",
+                    "start": "2025-01-01",
+                    "end": "2026-09-24",
+                },
+            ],
+            "sort_field": "effective_time",
+        },
+    )
+
+    params = searches[0]
+    assert params["search"] == (
+        '(openfda.generic_name:"paracetamol" openfda.generic_name:"acetaminophen") AND '
+        '(openfda.manufacturer_name:"Bayer") AND (effective_time:[20250101 TO 20260924])'
+    )
+    assert params["sort"] == "effective_time:desc"
+    assert result.data["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_adverse_event_filters_are_validated_against_the_event_catalogue() -> None:
+    fda = OpenFDAClient(
+        api_key=None,
+        base_url="https://api.fda.test",
+        timeout_seconds=10,
+        max_records=25,
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"results": []})),
+    )
+    client = FastMCPToolClient(create_internal_mcp_server(fda))
+
+    result = await client.call_tool(
+        "analyze_fda_adverse_event_reactions",
+        {
+            "drug_name": "aspirin",
+            "additional_filters": [
+                {
+                    "field": "received_date",
+                    "match": "range",
+                    "start": "2025-01-01",
+                    "end": "2025-12-31",
+                }
+            ],
+        },
+    )
+
+    assert result.data["status"] == "invalid_query"
+    assert "receivedate" in result.data["errors"][0]

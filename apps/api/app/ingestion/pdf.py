@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -9,39 +10,63 @@ from urllib.parse import urlparse
 import httpx
 
 OCRMode = Literal["auto", "never", "always"]
-ALLOWED_FDA_HOSTS = {"fda.gov"}
+
+# Documents may only be fetched from hosts a registered source vouches for. The set is passed
+# in rather than hardcoded so each source contributes its own hosts; an empty set fetches
+# nothing, which is the safe default for a misconfigured deployment.
+ALLOWED_FDA_HOSTS = frozenset({"fda.gov"})
 GRAPH_TERMS = re.compile(
     r"(?:plasma|serum|blood)\s+concentration|concentration[- ]time|pharmacokinetic\s+profile",
     re.IGNORECASE,
 )
 
 
-def validate_fda_pdf_url(url: str) -> str:
+def validate_document_url(url: str, *, allowed_hosts: Collection[str]) -> str:
+    """Reject any document URL not served over HTTPS by an allowlisted host.
+
+    This is the ingestion pipeline's SSRF boundary: the model chooses these URLs, so the host
+    check is what stops a crafted link reaching an internal address. Subdomains of an allowed
+    host are accepted; look-alike suffixes such as "notfda.gov" are not.
+    """
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower().rstrip(".")
     if parsed.scheme != "https" or not any(
-        host == allowed or host.endswith(f".{allowed}") for allowed in ALLOWED_FDA_HOSTS
+        host == allowed or host.endswith(f".{allowed}") for allowed in allowed_hosts
     ):
-        raise ValueError("Only HTTPS documents hosted on fda.gov are allowed")
+        allowed_display = ", ".join(sorted(allowed_hosts)) or "no configured host"
+        raise ValueError(f"Only HTTPS documents hosted on {allowed_display} are allowed")
     if parsed.username or parsed.password or parsed.port not in (None, 443):
-        raise ValueError("FDA document URL contains unsupported authority information")
+        raise ValueError("Document URL contains unsupported authority information")
     return url
 
 
-class FDAPDFFetcher:
+def validate_fda_pdf_url(url: str) -> str:
+    """Backwards-compatible openFDA-only check."""
+    return validate_document_url(url, allowed_hosts=ALLOWED_FDA_HOSTS)
+
+
+class DocumentFetcher:
+    """Streams a PDF from any allowlisted source host, bounded by size."""
+
     def __init__(
         self,
         *,
         timeout_seconds: float,
         max_bytes: int,
+        allowed_hosts: Collection[str] = ALLOWED_FDA_HOSTS,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._max_bytes = max_bytes
+        self._allowed_hosts = frozenset(allowed_hosts)
         self._transport = transport
 
+    @property
+    def allowed_hosts(self) -> frozenset[str]:
+        return self._allowed_hosts
+
     async def fetch(self, url: str) -> tuple[bytes, str]:
-        validate_fda_pdf_url(url)
+        validate_document_url(url, allowed_hosts=self._allowed_hosts)
         async with httpx.AsyncClient(
             timeout=self._timeout_seconds,
             follow_redirects=True,
@@ -51,20 +76,22 @@ class FDAPDFFetcher:
         ) as response:
             response.raise_for_status()
             final_url = str(response.url)
-            validate_fda_pdf_url(final_url)
+            # Re-check after redirects: the first URL passing the allowlist says nothing about
+            # where the redirect chain actually landed.
+            validate_document_url(final_url, allowed_hosts=self._allowed_hosts)
             content_length = response.headers.get("content-length")
             if content_length and int(content_length) > self._max_bytes:
-                raise ValueError("FDA PDF exceeds the configured download limit")
+                raise ValueError("Document exceeds the configured download limit")
             chunks: list[bytes] = []
             received = 0
             async for chunk in response.aiter_bytes():
                 received += len(chunk)
                 if received > self._max_bytes:
-                    raise ValueError("FDA PDF exceeds the configured download limit")
+                    raise ValueError("Document exceeds the configured download limit")
                 chunks.append(chunk)
         payload = b"".join(chunks)
         if not payload.startswith(b"%PDF-"):
-            raise ValueError("The FDA URL did not return a PDF document")
+            raise ValueError("The URL did not return a PDF document")
         return payload, final_url
 
 

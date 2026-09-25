@@ -147,3 +147,81 @@ async def test_openfda_client_still_reports_skip_beyond_the_supported_ceiling() 
 
     with pytest.raises(OpenFDAError, match="25000"):
         await client.query("drug/event", skip=25_001)
+
+
+@pytest.mark.asyncio
+async def test_malformed_query_500_is_not_retried() -> None:
+    """openFDA reports a parse failure as HTTP 500; replaying it can only fail again."""
+    from app.fda.client import openfda_should_retry
+
+    attempts = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            500,
+            json={"error": {"code": "SERVER_ERROR", "details": "[parse_exception] Encountered"}},
+        )
+
+    client = OpenFDAClient(
+        api_key=None,
+        base_url="https://api.fda.test",
+        timeout_seconds=10,
+        max_records=25,
+        transport=httpx.MockTransport(handler),
+        requester=ResilientRequester(
+            source_name="openFDA",
+            retry_policy=RetryPolicy(max_attempts=3),
+            sleep=_no_sleep,
+            retry_predicate=openfda_should_retry,
+        ),
+    )
+
+    with pytest.raises(OpenFDAError, match="HTTP 500"):
+        await client.query("drug/label", search="bad query")
+
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_genuine_server_errors_are_still_retried() -> None:
+    from app.fda.client import openfda_should_retry
+
+    attempts = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(500, text="Internal Server Error")
+        return httpx.Response(200, json={"meta": {"results": {"total": 0}}, "results": []})
+
+    client = OpenFDAClient(
+        api_key=None,
+        base_url="https://api.fda.test",
+        timeout_seconds=10,
+        max_records=25,
+        transport=httpx.MockTransport(handler),
+        requester=ResilientRequester(
+            source_name="openFDA",
+            retry_policy=RetryPolicy(max_attempts=3),
+            sleep=_no_sleep,
+            retry_predicate=openfda_should_retry,
+        ),
+    )
+
+    await client.query("drug/label", search="aspirin")
+    assert attempts == 2
+
+
+def test_larger_page_client_shares_the_rate_budget() -> None:
+    client = OpenFDAClient(
+        api_key=None, base_url="https://api.fda.test", timeout_seconds=10, max_records=25
+    )
+
+    poller = client.with_max_records(500)
+
+    assert poller._requester is client._requester
+    with pytest.raises(ValueError, match="between 1 and 1000"):
+        client.with_max_records(5_000)

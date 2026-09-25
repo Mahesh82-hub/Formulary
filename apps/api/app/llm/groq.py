@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any, cast
 
 import httpx
@@ -12,6 +13,10 @@ from app.llm.models import (
     LLMToolOutput,
 )
 from app.llm.provider import LLMProviderError
+from app.llm.sanitize import strip_protocol_leaks
+from app.llm.web_citations import page_excerpts, parse_executed_tools, rewrite_citations
+
+logger = logging.getLogger(__name__)
 
 
 class GroqChatProvider(HTTPModelProvider):
@@ -23,14 +28,19 @@ class GroqChatProvider(HTTPModelProvider):
         timeout_seconds: float,
         max_retries: int = 1,
         retry_base_delay_seconds: float = 0.25,
+        max_rate_limit_retries: int = 3,
         transport: httpx.AsyncBaseTransport | None = None,
+        web_search_models: frozenset[str] = frozenset(),
     ) -> None:
+        # Models that get Groq's built-in browser_search next to the application's tools.
+        self._web_search_models = web_search_models
         super().__init__(
             api_key=api_key,
             base_url=base_url,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
             retry_base_delay_seconds=retry_base_delay_seconds,
+            max_rate_limit_retries=max_rate_limit_retries,
             transport=transport,
         )
 
@@ -43,6 +53,7 @@ class GroqChatProvider(HTTPModelProvider):
         tools: list[LLMToolDefinition],
         continuation: dict[str, object] | None = None,
         tool_outputs: list[LLMToolOutput] | None = None,
+        allow_web_search: bool = False,
     ) -> LLMCompletion:
         conversation = self._conversation(system_prompt, messages, continuation)
         conversation.extend(
@@ -69,6 +80,10 @@ class GroqChatProvider(HTTPModelProvider):
                 }
                 for tool in tools
             ]
+            # Built-in web search is offered only while tools are allowed. Synthesis turns pass
+            # no tools, and must not start new research through the back door.
+            if allow_web_search and model in self._web_search_models:
+                payload["tools"].append({"type": "browser_search"})
             payload["tool_choice"] = "auto"
         response = await self.post_json("chat/completions", payload)
         response_id = string_value(response.get("id"), field="id")
@@ -81,6 +96,15 @@ class GroqChatProvider(HTTPModelProvider):
         message = json_object(choices[0].get("message"), field="choice message")
         text_value = message.get("content")
         text = text_value if isinstance(text_value, str) else ""
+        text, leaked = strip_protocol_leaks(text)
+        if leaked:
+            logger.warning("Removed leaked chat-protocol fragment from Groq response %s", model)
+        web_queries, web_pages = parse_executed_tools(message.get("executed_tools"))
+        web_excerpts = page_excerpts(message.get("executed_tools"))
+        text, web_sources = rewrite_citations(text, web_pages)
+        if not web_sources and web_pages:
+            # Pages were read but none cited inline; they still informed the answer.
+            web_sources = list(web_pages.values())
 
         raw_tool_calls = message.get("tool_calls")
         tool_call_items = (
@@ -118,6 +142,9 @@ class GroqChatProvider(HTTPModelProvider):
             tool_calls=tool_calls,
             usage=usage,
             continuation={"messages": conversation},
+            web_queries=web_queries,
+            web_sources=web_sources,
+            web_excerpts=web_excerpts,
         )
 
     @staticmethod

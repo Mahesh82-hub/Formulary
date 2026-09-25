@@ -80,3 +80,88 @@ export type ChatEvent = {
   type: ChatEventType;
   data: Record<string, unknown>;
 };
+
+export type Significance = "high" | "medium" | "low";
+
+export type RegulatoryEventType =
+  | "new_drug_approval"
+  | "generic_approval"
+  | "new_indication"
+  | "manufacturing_change"
+  | "safety_program_change"
+  | "bioequivalence_supplement"
+  | "labeling_supplement"
+  | "other_supplement"
+  | "label_change"
+  | "trial_status_change"
+  | "trial_registered"
+  | "trial_results_posted";
+
+export type LabelSectionChange = {
+  section: string;
+  label: string;
+  change: "added" | "removed" | "revised";
+  before: string | null;
+  after: string | null;
+  added_terms: string[];
+  removed_terms: string[];
+};
+
+export type RegulatoryEvent = {
+  id: string;
+  source: string;
+  event_type: RegulatoryEventType;
+  significance: Significance;
+  headline: string;
+  summary: string;
+  subject: string;
+  drug_names: string[];
+  sponsor: string | null;
+  occurred_on: string;
+  detected_at: string;
+  source_url: string;
+  details: {
+    changes?: LabelSectionChange[];
+    labels?: Array<{ set_id: string; manufacturer: string | null; url: string; version: string }>;
+    documents?: Array<{ type: string | null; url: string; date: string | null }>;
+    why_stopped?: string | null;
+    nct_id?: string;
+    [key: string]: unknown;
+  };
+  provenance: { source?: string; api_url?: string; retrieved_at?: string; disclaimer?: string };
+};
+
+export type EventFeed = {
+  events: RegulatoryEvent[];
+  next_cursor: string | null;
+  last_7_days: Record<Significance, number>;
+};
+
+export type Watch = {
+  id: string;
+  name: string;
+  terms: string[];
+  event_types: RegulatoryEventType[];
+  min_significance: Significance;
+  notify_email: boolean;
+  slack_configured: boolean;
+  slack_webhook_hint: string | null;
+  active: boolean;
+  last_notified_at: string | null;
+  last_delivery_error: string | null;
+  created_at: string;
+};
+
+export type MonitorRun = {
+  id: string;
+  detector: string;
+  status: "running" | "completed" | "failed" | "skipped";
+  window_start: string;
+  window_end: string;
+  records_scanned: number;
+  events_created: number;
+  baselines_recorded: number;
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+};

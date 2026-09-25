@@ -41,6 +41,8 @@ OPENFDA_DATASETS: frozenset[str] = frozenset(get_args(OpenFDADataset))
 # openFDA rejects paging beyond this offset. Declared once so the client guard and the
 # MCP tool clamp cannot drift apart.
 OPENFDA_MAX_SKIP = 25_000
+# openFDA's largest accepted page size.
+OPENFDA_MAX_PAGE_SIZE = 1_000
 
 
 class OpenFDAQuery(BaseModel):
@@ -69,3 +71,7 @@ class OpenFDAResult(BaseModel):
     results: list[dict[str, Any]]
     provenance: FDAProvenance
     caveats: list[str] = Field(default_factory=list)
+    # "invalid_query" means the request was rejected before being sent; see errors. It is
+    # never evidence that data is absent.
+    status: Literal["ok", "invalid_query"] = "ok"
+    errors: list[str] = Field(default_factory=list)
