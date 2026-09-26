@@ -13,32 +13,99 @@ import pytest
 
 from app.fda.client import OpenFDAClient
 from app.fda.composition import drug_composition, split_ingredients
-from app.fda.names import rewrite_words, search_names, us_name
-from app.fda.search import _free_text_expression
+from app.fda.names import RxNormNames, StaticNames, expand
 from app.llm.groq import GroqChatProvider
 from app.llm.models import LLMMessage, LLMToolDefinition, WebSource
 from app.llm.web_citations import parse_executed_tools, rewrite_citations, sources_section
+from app.sources.federation import SearchRequest
+from app.sources.resilience import ResilientRequester, RetryPolicy
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def test_international_names_are_searched_with_their_us_twin() -> None:
-    assert us_name("Paracetamol") == "acetaminophen"
-    assert search_names("paracetamol") == ["paracetamol", "acetaminophen"]
-    # The reverse direction too, so a US query still finds international records.
-    assert search_names("acetaminophen") == ["acetaminophen", "paracetamol"]
-    assert search_names("metformin") == ["metformin"]
-    assert rewrite_words("Pfizer paracetamol tablets") == "Pfizer acetaminophen tablets"
+async def _no_sleep(seconds: float) -> None: ...
 
 
-def test_federated_free_text_requires_every_meaningful_term() -> None:
-    # Space-separated terms are OR in openFDA; this matched 16 unrelated Pfizer letters.
-    assert _free_text_expression("Pfizer paracetamol composition") == (
-        '"Pfizer" AND "acetaminophen"'
+# RxNav responses, trimmed from what the live service returned in September 2026.
+RXNAV = {
+    "paracetamol": [{"rxcui": "161", "name": None}, {"rxcui": "161", "name": "paracetamol"}],
+    "aciclovir": [{"rxcui": "281", "name": "Acyclovir"}, {"rxcui": "281", "name": "ACYCLOVIR"}],
+    "Tylenol": [{"rxcui": "202433", "name": "Tylenol"}],
+    "Bayer": [
+        {"rxcui": "1168631", "name": "Bayer Aspirin Pill"},
+        {"rxcui": "1168628", "name": "Bayer Aspirin Oral Product"},
+    ],
+    "Kenvue": [],
+}
+PROPERTIES = {
+    "161": {"name": "acetaminophen", "tty": "IN"},
+    "281": {"name": "acyclovir", "tty": "IN"},
+    "202433": {"name": "Tylenol", "tty": "BN"},
+}
+
+
+def _rxnav(calls: list[str], fail: bool = False) -> RxNormNames:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if fail:
+            return httpx.Response(503)
+        if request.url.path.endswith("approximateTerm.json"):
+            term = request.url.params["term"]
+            return httpx.Response(200, json={"approximateGroup": {"candidate": RXNAV[term]}})
+        rxcui = request.url.path.split("/rxcui/")[1].split("/")[0]
+        return httpx.Response(200, json={"properties": PROPERTIES[rxcui]})
+
+    return RxNormNames(
+        base_url="https://rxnav.test/REST",
+        timeout_seconds=10,
+        transport=httpx.MockTransport(handler),
+        requester=ResilientRequester(
+            source_name="RxNorm", retry_policy=RetryPolicy(max_attempts=1), sleep=_no_sleep
+        ),
     )
-    # Words naming the dataset or the kind of answer are not required in the record.
-    assert _free_text_expression("semaglutide shortage") == '"semaglutide"'
-    assert _free_text_expression("what is the composition of the product") == '""'
+
+
+@pytest.mark.asyncio
+async def test_rxnorm_expands_international_names_and_nothing_else() -> None:
+    resolved = await expand(_rxnav([]), ["paracetamol", "aciclovir", "Tylenol", "Bayer", "Kenvue"])
+
+    assert resolved == {
+        "paracetamol": ("paracetamol", "acetaminophen"),  # exact synonym match
+        "aciclovir": ("aciclovir", "acyclovir"),  # every candidate is one ingredient
+        "Tylenol": ("Tylenol",),  # a brand is never widened to its ingredient
+        "Bayer": ("Bayer",),  # fuzzy matches to Bayer Aspirin products are rejected
+        "Kenvue": ("Kenvue",),
+    }
+
+
+@pytest.mark.asyncio
+async def test_rxnorm_results_are_cached_and_failures_fall_back_without_caching() -> None:
+    calls: list[str] = []
+    resolver = _rxnav(calls)
+    await resolver.variants("paracetamol")
+    first = len(calls)
+    await resolver.variants("Paracetamol")
+    assert len(calls) == first  # cached, case-insensitively
+
+    failing_calls: list[str] = []
+    failing = _rxnav(failing_calls, fail=True)
+    assert await failing.variants("paracetamol") == ("paracetamol",)
+    await failing.variants("paracetamol")
+    assert len(failing_calls) == 2  # a failure is retried next time, not remembered
+
+
+def test_search_requests_require_every_stated_term_and_accept_any_alternative() -> None:
+    request = SearchRequest(
+        query="compositions of paracetamol from Pfizer",
+        terms=(("paracetamol", "acetaminophen"), ("Pfizer",)),
+    )
+
+    # openFDA treats space-separated terms as OR; this matched 16 unrelated Pfizer letters.
+    assert request.boolean() == '("paracetamol" OR "acetaminophen") AND "Pfizer"'
+    assert SearchRequest.from_text("semaglutide shortage").boolean() == (
+        '"semaglutide" AND "shortage"'
+    )
+    assert SearchRequest(query="x", terms=(('bad "quote"',),)).boolean() == '"bad quote"'
 
 
 def test_multi_part_inactive_ingredient_lists_are_split_cleanly() -> None:
@@ -138,7 +205,12 @@ async def test_composition_picks_top_labelers_itself_and_prefers_single_ingredie
         transport=httpx.MockTransport(handler),
     )
 
-    result = await drug_composition(fda, "paracetamol", max_manufacturers=2)
+    result = await drug_composition(
+        fda,
+        "paracetamol",
+        max_manufacturers=2,
+        names_resolver=StaticNames({"paracetamol": "acetaminophen"}),
+    )
 
     # Chosen from the data, not by asking the user; the repackager is excluded.
     assert [item.manufacturer for item in result.manufacturers] == ["Kenvue Brands LLC"]
@@ -396,3 +468,48 @@ def test_fragments_are_recognised_but_short_complete_answers_are_not() -> None:
     assert not is_degenerate_answer("Yes.")
     assert not is_degenerate_answer("No matching recall was found in openFDA.")
     assert not is_degenerate_answer("x" * 250)
+
+
+def test_unterminated_markers_are_removed() -> None:
+    from app.services.citations import finalize_answer
+
+    assert finalize_answer("Rows 【 } |\n\nNext section", []) == "Rows |\n\nNext section"
+
+
+@pytest.mark.asyncio
+async def test_search_relaxes_terms_records_rarely_contain_but_keeps_the_subject() -> None:
+    from datetime import UTC, datetime
+
+    from app.sources.federation import FederatedRecord, FederatedSearchCoordinator, SearchRequest
+    from app.sources.models import SourceProvenance
+
+    seen: list[tuple[tuple[str, ...], ...]] = []
+
+    class OnlyTheDrug:
+        name = "FDA drug label"
+
+        async def search(self, request: SearchRequest, *, limit: int) -> list[FederatedRecord]:
+            seen.append(request.terms)
+            if len(request.terms) > 1:
+                return []  # no label says "ingredients" alongside the product name
+            return [
+                FederatedRecord(
+                    source=self.name,
+                    title="Panadol",
+                    snippet="Paracetamol 500 mg",
+                    external_key="p1",
+                    provenance=SourceProvenance(
+                        source="openFDA", api_url="https://x.test", retrieved_at=datetime.now(UTC)
+                    ),
+                )
+            ]
+
+    result = await FederatedSearchCoordinator([OnlyTheDrug()]).search(
+        SearchRequest(
+            query="Panadol Advance ingredients", terms=(("Panadol Advance",), ("ingredients",))
+        )
+    )
+
+    assert seen == [(("Panadol Advance",), ("ingredients",)), (("Panadol Advance",),)]
+    assert len(result.records) == 1
+    assert "dropping 'ingredients'" in result.caveats[-1]

@@ -197,6 +197,7 @@ class ChatOrchestrator:
             research_limit_reached = False
             research_limit_reason: str | None = None
             tool_validation_recovered = False
+            web_search_withdrawn = False
             clean_synthesis_fallback_used = False
             clarification_block: dict[str, Any] | None = None
 
@@ -242,23 +243,40 @@ class ChatOrchestrator:
                         clean_synthesis_fallback_used or used_clean_fallback
                     )
                 else:
-                    try:
-                        completion = await self._gateway.complete(
-                            provider=self._provider_name(run.provider),
-                            model=run.model,
-                            system_prompt=system_prompt,
-                            messages=history,
-                            tools=llm_tools,
-                            continuation=continuation,
-                            tool_outputs=tool_outputs,
-                            # Official sources first, enforced rather than requested: web
-                            # search is offered only once an official tool has answered. In
-                            # evaluation the model otherwise sometimes went straight to the web.
-                            allow_web_search=tool_calls_executed > 0,
-                        )
-                    except LLMProviderError as error:
-                        if not self._is_tool_validation_error(error):
-                            raise
+                    # Official sources first, enforced rather than requested: web search is
+                    # offered only once an official tool has answered. In evaluation the model
+                    # otherwise sometimes went straight to the web.
+                    offer_web_search = tool_calls_executed > 0 and not web_search_withdrawn
+                    completion = None
+                    for allow_web_search in (True, False) if offer_web_search else (False,):
+                        try:
+                            completion = await self._gateway.complete(
+                                provider=self._provider_name(run.provider),
+                                model=run.model,
+                                system_prompt=system_prompt,
+                                messages=history,
+                                tools=llm_tools,
+                                continuation=continuation,
+                                tool_outputs=tool_outputs,
+                                allow_web_search=allow_web_search,
+                            )
+                            break
+                        except LLMProviderError as error:
+                            if not self._is_tool_validation_error(error):
+                                raise
+                            if allow_web_search:
+                                # gpt-oss was trained on a browser with search, open and find
+                                # actions, and sometimes calls "find", which Groq's
+                                # browser_search does not offer. Retry the round without web
+                                # search, so research continues with the official tools, and
+                                # do not offer it again this turn.
+                                logger.warning(
+                                    "Provider rejected a tool call for run %s with web search "
+                                    "offered; retrying without web search",
+                                    run.id,
+                                )
+                                web_search_withdrawn = True
+                    if completion is None:
                         logger.warning(
                             "Provider rejected a generated tool call for run %s; forcing synthesis",
                             run.id,
@@ -334,6 +352,7 @@ class ChatOrchestrator:
                     "tool_calls_requested": len(completion.tool_calls),
                     "synthesis_only": synthesis_only,
                     "tool_validation_recovery": tool_validation_recovered,
+                    "web_search_withdrawn": web_search_withdrawn,
                     "clean_synthesis_fallback": clean_synthesis_fallback_used,
                     "tool_calls_executed_total": tool_calls_executed,
                     "tool_calls_suppressed_total": tool_calls_suppressed,
@@ -353,6 +372,7 @@ class ChatOrchestrator:
                     "tool_calls_executed": tool_calls_executed,
                     "tool_calls_suppressed": tool_calls_suppressed,
                     "tool_validation_recovered": tool_validation_recovered,
+                    "web_search_withdrawn": web_search_withdrawn,
                     "clean_synthesis_fallback_used": clean_synthesis_fallback_used,
                 }
                 await session.commit()
@@ -716,6 +736,7 @@ class ChatOrchestrator:
                 "tool_calls_executed": tool_calls_executed,
                 "tool_calls_suppressed": tool_calls_suppressed,
                 "tool_validation_recovered": tool_validation_recovered,
+                "web_search_withdrawn": web_search_withdrawn,
                 "clean_synthesis_fallback_used": clean_synthesis_fallback_used,
                 "user_may_continue_research": (
                     clarification_block is not None
@@ -864,10 +885,15 @@ class ChatOrchestrator:
                 tool_outputs=tool_outputs,
             )
         except LLMProviderError as error:
-            if not self._is_tool_validation_error(error):
+            # Any rejection of a tool-free request comes from the conversation state: the model
+            # reached for a tool anyway ("tool_use_failed"), or wrote tool-call syntax Groq could
+            # not parse ("Parsing failed"). A fresh conversation carrying the evidence avoids
+            # both; if it is rejected too, that error is raised.
+            if error.status_code != 400:
                 raise
             logger.warning(
-                "Provider attempted a tool during synthesis; retrying with a clean conversation"
+                "Provider rejected synthesis (%s); retrying with a clean conversation",
+                error.details.get("provider_error_code") or error.code,
             )
             return await self._clean_synthesis(
                 provider=provider,

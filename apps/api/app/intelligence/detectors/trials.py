@@ -182,8 +182,7 @@ def trial_events(
         phrase = STATUS_PHRASES.get(current, f"status changed to {trial.status_label}")
         before = (previous_status or "UNKNOWN").replace("_", " ").title()
         summary = (
-            f"{trial.nct_id}: {trial.title}. "
-            f"Status moved from {before} to {trial.status_label}."
+            f"{trial.nct_id}: {trial.title}. Status moved from {before} to {trial.status_label}."
         )
         if trial.why_stopped:
             summary += f" Reason given: {trial.why_stopped}"

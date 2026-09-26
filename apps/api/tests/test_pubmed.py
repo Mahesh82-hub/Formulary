@@ -3,7 +3,7 @@ import pytest
 
 from app.pubmed.client import PubMedClient, PubMedError
 from app.pubmed.search import PubMedSearcher
-from app.sources.federation import FederatedSearchCoordinator
+from app.sources.federation import FederatedRecord, FederatedSearchCoordinator, SearchRequest
 from app.sources.resilience import ResilientRequester, RetryPolicy
 
 EFETCH_XML = """<?xml version="1.0"?>
@@ -170,7 +170,7 @@ async def test_a_pubmed_outage_does_not_remove_other_sources_from_an_answer() ->
     class StubFDA:
         name = "FDA drug label"
 
-        async def search(self, query: str, *, limit: int):  # type: ignore[no-untyped-def]
+        async def search(self, request: SearchRequest, *, limit: int) -> list[FederatedRecord]:
             from datetime import UTC, datetime
 
             from app.sources.federation import FederatedRecord
@@ -190,9 +190,7 @@ async def test_a_pubmed_outage_does_not_remove_other_sources_from_an_answer() ->
                 )
             ]
 
-    coordinator = FederatedSearchCoordinator(
-        [StubFDA(), PubMedSearcher(_client(failing))]
-    )
+    coordinator = FederatedSearchCoordinator([StubFDA(), PubMedSearcher(_client(failing))])
     result = await coordinator.search("aspirin")
 
     assert result.succeeded_sources == ["FDA drug label"]

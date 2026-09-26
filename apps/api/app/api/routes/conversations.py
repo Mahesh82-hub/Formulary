@@ -235,9 +235,7 @@ async def edit_user_message(
     if original is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User message not found")
 
-    document_blocks = [
-        dict(block) for block in original.content if block.get("type") == "document"
-    ]
+    document_blocks = [dict(block) for block in original.content if block.get("type") == "document"]
     replacement = Message(
         conversation_id=conversation.id,
         parent_message_id=original.parent_message_id,

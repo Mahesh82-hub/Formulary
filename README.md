@@ -73,6 +73,22 @@ Open <http://localhost:3000>. The generic FDA chatbot is available at `/chat` an
 bioequivalence workspace at `/bioequivalence`. The frontend talks directly to the API URL
 configured by `NEXT_PUBLIC_API_BASE_URL`.
 
+## Answer-quality evaluation
+
+`apps/api/scripts/eval_chat.py` grades real answers against checks in the terminal.
+`apps/api/scripts/eval_langsmith.py` runs the same cases as a LangSmith experiment, scored with
+RAGAS metrics (faithfulness, answer relevancy, context utilisation and, once reference
+answers are written in the LangSmith UI, context recall and factual correctness) alongside the
+project's own rule and numeric-grounding checks. Both call the live model and sources.
+
+```bash
+uv pip install -r requirements.txt -r requirements-eval.txt
+# set LANGSMITH_API_KEY in .env
+cd apps/api
+python -m scripts.eval_langsmith --sync-only    # create the dataset
+python -m scripts.eval_langsmith                # run an experiment
+```
+
 ## Quality checks
 
 ```bash

@@ -59,9 +59,7 @@ async def list_events(
     normalized = " ".join((query or "").split())
     if normalized:
         statement = statement.where(
-            RegulatoryEvent.search_vector.op("@@")(
-                func.websearch_to_tsquery("english", normalized)
-            )
+            RegulatoryEvent.search_vector.op("@@")(func.websearch_to_tsquery("english", normalized))
         )
     if cursor:
         day, identifier = decode_cursor(cursor)
@@ -72,8 +70,9 @@ async def list_events(
     bounded = min(max(1, limit), 100)
     rows = list(
         await session.scalars(
-            statement.order_by(RegulatoryEvent.occurred_on.desc(), RegulatoryEvent.id.desc())
-            .limit(bounded + 1)
+            statement.order_by(RegulatoryEvent.occurred_on.desc(), RegulatoryEvent.id.desc()).limit(
+                bounded + 1
+            )
         )
     )
     next_cursor = encode_cursor(rows[bounded - 1]) if len(rows) > bounded else None

@@ -286,7 +286,12 @@ def ungrounded_numbers(
 
     # Only calculations that start from grounded inputs yield derived values; "fu = 0.45"
     # with an invented 0.45 must not make a later "0.45" look supported.
-    derived = Evidence(line for line in lines if "=" in line and builds_on_evidence(line))
+    derived = Evidence(line for line in lines if is_calculation(line) and builds_on_evidence(line))
+    # A value is judged once, where it first appears - where it is introduced with its
+    # context. Later mentions (summaries, recaps) inherit that verdict; judging each line
+    # separately accepted and flagged the same value in one answer.
+    verdicts: dict[float, bool] = {}
+    answer_has_grounded_input = any(builds_on_evidence(line) for line in lines)
     header: list[str] | None = None
     for line in lines:
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
@@ -328,19 +333,38 @@ def ungrounded_numbers(
                 # a calculation on the same line.
                 grounded_in_line = True
                 continue
+            if value in verdicts:
+                grounded_in_line = grounded_in_line or verdicts[value]
+                if not verdicts[value] and token not in candidates:
+                    candidates.append(token)
+                continue
             if evidence.supports(token, words, topic):
                 grounded_in_line = True
-            elif "=" not in line and derived.restates(token):
-                pass  # restates the result of a calculation shown elsewhere in the answer
+                verdicts[value] = True
+            elif not is_calculation(line) and derived.restates(token):
+                verdicts[value] = True  # restates a calculation shown elsewhere in the answer
             else:
+                verdicts[value] = False
                 candidates.append(token)
         # An explicit calculation built on grounded figures is derivation, not invention.
-        if candidates and "=" in line and grounded_in_line:
+        # Formula lines (LaTeX, fractions, powers of ten) often hold only intermediate values,
+        # so they qualify when the answer rests on at least one grounded input.
+        if candidates and is_calculation(line) and (grounded_in_line or answer_has_grounded_input):
+            for token in candidates:
+                verdicts[_value(token)] = True
             continue
         for token in candidates:
             if token not in flagged:
                 flagged.append(token)
     return flagged
+
+
+FORMULA = re.compile(r"\\frac|\\times|\\approx|\\cdot|10\s*\^|\^\s*\{?-?\d|×\s*10|/\s*\(\s*1\s*\+")
+
+
+def is_calculation(line: str) -> bool:
+    """A line showing working: an equals sign, or formula notation such as \\frac or 10^-5."""
+    return "=" in line or bool(FORMULA.search(line))
 
 
 def unverified_note(figures: list[str]) -> str:

@@ -1,0 +1,11 @@
+# Optional: answer-quality evaluation in LangSmith with RAGAS metrics
+# (apps/api/scripts/eval_langsmith.py). Not needed to run the app.
+#   uv pip install -r requirements.txt -r requirements-eval.txt
+-r requirements.txt
+
+langsmith>=0.14,<0.15
+ragas>=0.4.3,<0.5
+# ragas 0.4.3 imports a module that langchain-community 0.4 removed.
+langchain-community>=0.3,<0.4
+openai>=2,<4
+python-dotenv>=1,<2

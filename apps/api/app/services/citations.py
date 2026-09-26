@@ -207,6 +207,7 @@ def link_inline_identifiers(text: str, links: list[SourceLink]) -> str:
 
 
 ANY_MARKER = re.compile(r"【([^】]*)】")
+UNTERMINATED_MARKER = re.compile(r"[ \t]*【[^】\w\n|]*")
 FAMILY_HOSTS = {
     "openfda": ("api.fda.gov", "dailymed.nlm.nih.gov", "accessdata.fda.gov"),
     "fda": ("api.fda.gov", "dailymed.nlm.nih.gov", "accessdata.fda.gov", "fda.gov"),
@@ -240,7 +241,13 @@ def resolve_remaining_markers(text: str, links: list[SourceLink]) -> str:
         return "\u0000"
 
     # A removed marker takes its leading space with it, so "a claim 【x】." reads "a claim.".
-    return re.sub(r"[ \t]*\u0000", "", ANY_MARKER.sub(replace, text))
+    text = re.sub(r"[ \t]*\u0000", "", ANY_MARKER.sub(replace, text))
+    # An opening bracket that never closes is an output artifact ("【 } |"); drop it and the
+    # stray punctuation attached to it.
+    # Never swallow a table pipe that follows the artifact; keep one space before it.
+    return UNTERMINATED_MARKER.sub(
+        lambda match: " " if match.string[match.end() : match.end() + 1] == "|" else "", text
+    )
 
 
 def finalize_answer(text: str, links: list[SourceLink]) -> str:

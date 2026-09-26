@@ -19,6 +19,7 @@ from app.pubmed.search import PubMedSearcher
 from app.sources.federation import (
     FederatedRecord,
     FederatedSearchCoordinator,
+    SearchRequest,
     SourceSearcher,
 )
 from app.sources.models import SourceProvenance
@@ -40,8 +41,9 @@ class IngestedEvidenceSearcher:
     def __init__(self, coordinator: FDAIngestionCoordinator) -> None:
         self._coordinator = coordinator
 
-    async def search(self, query: str, *, limit: int) -> list[FederatedRecord]:
-        result = await self._coordinator.search_chunks(query, limit=limit)
+    async def search(self, request: SearchRequest, *, limit: int) -> list[FederatedRecord]:
+        text = " ".join(value for group in request.terms for value in group) or request.query
+        result = await self._coordinator.search_chunks(text[:500], limit=limit)
         records: list[FederatedRecord] = []
         for chunk in result.chunks:
             snippet = chunk.content.strip()

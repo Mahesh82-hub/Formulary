@@ -1007,3 +1007,86 @@ async def test_repeated_calls_to_a_capped_tool_are_refused_with_guidance(
     assert len(suppressed) == 2
     assert suppressed[0].result is not None
     assert "already been used 2 times" in suppressed[0].result["data"]["message"]
+
+
+def _rejected(code: str, message: str) -> LLMProviderError:
+    return LLMProviderError(
+        message,
+        code="provider_request_rejected",
+        status_code=400,
+        details={"provider_error_code": code},
+    )
+
+
+class ScriptedBrowserFindGateway:
+    """Calls gpt-oss's "find" browser action whenever web search is offered, as in evaluation.
+
+    With `synthesis_unparseable`, it also rejects the round retried without web search, and
+    the first tool-free synthesis fails to parse: the sequence that once failed a whole run.
+    """
+
+    def __init__(self, *, synthesis_unparseable: bool = False) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.synthesis_unparseable = synthesis_unparseable
+
+    def validate_selection(self, provider: str, model: str) -> None: ...
+
+    async def complete(self, **kwargs: Any) -> LLMCompletion:
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            return LLMCompletion(
+                provider_response_id="find-1",
+                tool_calls=[
+                    LLMToolCall(
+                        id="find-call",
+                        name="convert_mass",
+                        arguments={"value": 1500, "from_unit": "mcg", "to_unit": "mg"},
+                    )
+                ],
+                continuation={"test": "find"},
+            )
+        if kwargs.get("allow_web_search"):
+            raise _rejected(
+                "tool_use_failed", "attempted to call tool 'find' which was not in request.tools"
+            )
+        if kwargs["tools"] and self.synthesis_unparseable:
+            raise _rejected("tool_use_failed", "attempted to call tool 'find'")
+        if not kwargs["tools"] and kwargs["continuation"] is not None:
+            raise _rejected("output_parse_failed", "Parsing failed.")
+        return LLMCompletion(
+            provider_response_id=f"find-{len(self.calls)}", text="1500 mcg is 1.5 mg."
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_a_rejected_browser_action_withdraws_web_search_and_keeps_researching() -> None:
+    gateway = ScriptedBrowserFindGateway()
+
+    body, run, _ = await _turn(gateway, "Convert 1500 mcg to mg")
+
+    assert run.status == "completed"
+    assert "1.5 mg" in body
+    # The same round was retried without web search, with the official tools still offered.
+    assert [call["allow_web_search"] for call in gateway.calls] == [False, True, False]
+    assert gateway.calls[-1]["tools"]
+    assert run.orchestration_state["web_search_withdrawn"] is True
+    assert run.orchestration_state["tool_validation_recovered"] is False
+    assert run.orchestration_state["completion_reason"] == "model_response"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_an_unparseable_synthesis_falls_back_to_a_clean_conversation() -> None:
+    gateway = ScriptedBrowserFindGateway(synthesis_unparseable=True)
+
+    body, run, _ = await _turn(gateway, "Convert 1500 mcg to mg")
+
+    assert run.status == "completed"
+    assert "event: run.failed" not in body
+    assert "1.5 mg" in body
+    assert len(gateway.calls) == 5
+    clean = gateway.calls[-1]
+    assert clean["tools"] == [] and clean["continuation"] is None
+    assert run.orchestration_state["tool_validation_recovered"] is True
+    assert run.orchestration_state["clean_synthesis_fallback_used"] is True

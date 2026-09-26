@@ -133,3 +133,27 @@ def test_an_invented_value_cannot_launder_itself_through_an_equation() -> None:
     answer = "fu = 0.45 (estimated)\nThe fraction unbound is 0.45."
 
     assert ungrounded_numbers(answer, ["Filler with no numbers."], question="ceftiofur") == ["0.45"]
+
+
+def test_a_value_is_judged_where_it_is_introduced_not_on_every_restatement() -> None:
+    """A live olaparib answer stated 0.060 mg/mL twice and a wrong 0.14 uM (it is 0.14 mM)."""
+    evidence = [
+        "Olaparib (OLA), a poorly water-soluble anticancer drug (0.0601 mg/mL) with limited oral "
+        "bioavailability. " + "Unrelated: class IV drugs showed 14 % variability. " * 30
+    ]
+    answer = (
+        "- Olaparib's measured water solubility is 0.060 mg/mL (about 0.14 uM).\n"
+        "- Consistent with peer-reviewed literature on BCS class and low permeability, "
+        "the 0.060 mg/mL and 0.14 uM figures support class IV."
+    )
+
+    assert ungrounded_numbers(answer, evidence, question="olaparib solubility and BCS") == ["0.14"]
+
+
+def test_latex_working_counts_as_a_calculation() -> None:
+    answer = (
+        "The pKa of metformin is 12.4.\n"
+        "\\\\text{Fraction BH+} \\\\approx \\\\frac{1}{1 + 1\\\\times10^{-5}} \\\\approx 0.99999"
+    )
+
+    assert ungrounded_numbers(answer, ["The pKa of metformin is 12.4."], question="pH 7.4") == []

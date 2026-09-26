@@ -106,6 +106,15 @@ CLINICALTRIALS_PROFILE = SourceProfile(
 )
 
 
+# RxNav publishes a limit of 20 requests per second per IP. Name lookups are cached, so real
+# traffic is far lower; the budget stays well under the ceiling.
+RXNORM_PROFILE = SourceProfile(
+    name="RxNorm",
+    rate_per_second=8.0,
+    burst=10,
+    timeout_seconds=15.0,
+)
+
 REGISTERED_PROFILES: tuple[SourceProfile, ...] = (
     OPENFDA_PROFILE,
     PUBMED_PROFILE,

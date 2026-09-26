@@ -19,6 +19,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
@@ -29,6 +30,47 @@ from app.sources.models import SourceProvenance
 logger = logging.getLogger(__name__)
 
 SourceSearchStatus = Literal["ok", "timeout", "error", "empty"]
+# Characters with meaning in openFDA, PubMed, or ClinicalTrials.gov query syntax.
+RESERVED = set('":()[]{}\\/+!^~*?<>')
+
+
+def _plain(value: str) -> str:
+    return " ".join(
+        "".join(" " if character in RESERVED else character for character in value).split()
+    )
+
+
+@dataclass(frozen=True)
+class SearchRequest:
+    """What to look for, stated structurally rather than as text to be guessed at.
+
+    ``query`` is the question in natural language, used by sources that rank by relevance.
+    ``terms`` are the things every matching record must mention - a drug, a company, a
+    condition - each with the alternative names it may appear under. Previously the
+    application guessed these by stripping a hand-written list of filler words from the
+    question; the model, which understands the question, now states them directly.
+    """
+
+    query: str
+    terms: tuple[tuple[str, ...], ...] = ()
+
+    @classmethod
+    def from_text(cls, text: str) -> SearchRequest:
+        """A request with no stated terms: every word of the text is required."""
+        words = tuple((word,) for word in _plain(text).split()[:8])
+        return cls(query=" ".join(text.split()), terms=words)
+
+    def boolean(self, *, quote: bool = True) -> str:
+        """Every term required, alternatives within a term interchangeable:
+        (a OR b) AND (c). Understood by openFDA, PubMed, and ClinicalTrials.gov alike."""
+        groups = []
+        for alternatives in self.terms:
+            cleaned = [_plain(value) for value in alternatives if _plain(value)]
+            if not cleaned:
+                continue
+            rendered = [f'"{value}"' if quote else value for value in cleaned]
+            groups.append(rendered[0] if len(rendered) == 1 else "(" + " OR ".join(rendered) + ")")
+        return " AND ".join(groups)
 
 
 class FederatedRecord(BaseModel):
@@ -83,7 +125,7 @@ class SourceSearcher(Protocol):
 
     name: str
 
-    async def search(self, query: str, *, limit: int) -> list[FederatedRecord]: ...
+    async def search(self, request: SearchRequest, *, limit: int) -> list[FederatedRecord]: ...
 
 
 class FederatedSearchCoordinator:
@@ -106,16 +148,34 @@ class FederatedSearchCoordinator:
         self._per_source_limit = per_source_limit
         self._rrf_k = rrf_k
 
-    async def search(self, query: str, *, limit: int = 10) -> FederatedSearchResult:
-        normalized = " ".join(query.split())
-        if not normalized:
+    async def search(
+        self, request: SearchRequest | str, *, limit: int = 10
+    ) -> FederatedSearchResult:
+        if isinstance(request, str):
+            request = SearchRequest.from_text(request)
+        normalized = " ".join(request.query.split())
+        if not normalized or not request.boolean():
             raise ValueError("Federated search query must not be empty")
         if not self._searchers:
             return FederatedSearchResult(query=normalized, records=[], outcomes=[])
 
         gathered = await asyncio.gather(
-            *(self._search_one(searcher, normalized) for searcher in self._searchers),
+            *(self._search_one(searcher, request) for searcher in self._searchers),
         )
+        relaxed_from: SearchRequest | None = None
+        # Models sometimes state a term records rarely contain ("ingredients", "manufacturer").
+        # Rather than guess which words are filler, drop the last-stated term and retry,
+        # always keeping the first - usually the drug - so the search stays on subject.
+        while (
+            not any(records for _, records in gathered)
+            and not any(outcome.status in ("timeout", "error") for outcome, _ in gathered)
+            and len(request.terms) > 1
+        ):
+            relaxed_from = relaxed_from or request
+            request = SearchRequest(query=request.query, terms=request.terms[:-1])
+            gathered = await asyncio.gather(
+                *(self._search_one(searcher, request) for searcher in self._searchers),
+            )
 
         rankings: list[list[str]] = []
         by_identity: dict[str, FederatedRecord] = {}
@@ -138,17 +198,24 @@ class FederatedSearchCoordinator:
             record = by_identity[identity]
             records.append(record.model_copy(update={"fused_score": scores[identity]}))
 
+        caveats = self._caveats(outcomes)
+        if relaxed_from is not None:
+            dropped = [group[0] for group in relaxed_from.terms[len(request.terms) :]]
+            caveats.append(
+                f"No record mentioned every stated term; the search was relaxed by dropping "
+                f"{', '.join(repr(term) for term in dropped)}. Results may be broader than asked."
+            )
         return FederatedSearchResult(
             query=normalized,
             records=records,
             outcomes=outcomes,
-            caveats=self._caveats(outcomes),
+            caveats=caveats,
         )
 
     async def _search_one(
         self,
         searcher: SourceSearcher,
-        query: str,
+        request: SearchRequest,
     ) -> tuple[SourceOutcome, list[FederatedRecord]]:
         """Query one source, converting any failure into a reported outcome.
 
@@ -157,7 +224,7 @@ class FederatedSearchCoordinator:
         started = time.monotonic()
         try:
             records = await asyncio.wait_for(
-                searcher.search(query, limit=self._per_source_limit),
+                searcher.search(request, limit=self._per_source_limit),
                 timeout=self._timeout,
             )
         except TimeoutError:
@@ -211,9 +278,7 @@ class FederatedSearchCoordinator:
     @staticmethod
     def _caveats(outcomes: Sequence[SourceOutcome]) -> list[str]:
         caveats: list[str] = []
-        degraded = [
-            outcome for outcome in outcomes if outcome.status in ("timeout", "error")
-        ]
+        degraded = [outcome for outcome in outcomes if outcome.status in ("timeout", "error")]
         if degraded:
             names = ", ".join(sorted(outcome.source for outcome in degraded))
             caveats.append(

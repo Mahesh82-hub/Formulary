@@ -32,9 +32,7 @@ def _study(
             "sponsorCollaboratorsModule": {"leadSponsor": {"name": "Novo Nordisk A/S"}},
             "designModule": {"phases": ["PHASE3"]},
             "conditionsModule": {"conditions": ["Obesity"]},
-            "armsInterventionsModule": {
-                "interventions": [{"type": "DRUG", "name": "semaglutide"}]
-            },
+            "armsInterventionsModule": {"interventions": [{"type": "DRUG", "name": "semaglutide"}]},
             "descriptionModule": {"briefSummary": "A randomised trial."},
         },
         "hasResults": results_posted is not None,
