@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from app.fda.client import OpenFDAClient
 from app.fda.models import FDAProvenance
-from app.fda.names import search_names
+from app.fda.names import DrugNameResolver, PassthroughNames
 
 DAILYMED_URL = "https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid={}"
 NAME_FIELDS = ("openfda.generic_name", "openfda.brand_name", "openfda.substance_name")
@@ -160,8 +160,9 @@ async def drug_composition(
     manufacturers: list[str] | None = None,
     max_manufacturers: int = 5,
     products_per_manufacturer: int = 2,
+    names_resolver: DrugNameResolver | None = None,
 ) -> DrugCompositionResult:
-    names = search_names(drug)
+    names = list(await (names_resolver or PassthroughNames()).variants(drug))
     if not names:
         raise ValueError("A drug name is required")
     clause = name_clause(names)

@@ -11,18 +11,15 @@ suggestions, and drug names are searched under both their international and US n
 
 from __future__ import annotations
 
-import json
 import re
+from collections.abc import Mapping, Sequence
 from difflib import get_close_matches
-from functools import lru_cache
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.fda.names import search_names
+from app.fda.catalogue import fields as known_fields
 
-CATALOGUE_PATH = Path(__file__).with_name("fields.json")
 MatchMode = Literal["contains", "exact", "range", "exists"]
 RANGE_BOUND = re.compile(r"^[0-9A-Za-z*\-.]+$")
 ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
@@ -90,16 +87,6 @@ class QueryValidationError(ValueError):
         self.errors = errors
 
 
-@lru_cache
-def catalogue() -> dict[str, dict[str, dict[str, Any]]]:
-    data: dict[str, dict[str, dict[str, Any]]] = json.loads(CATALOGUE_PATH.read_text())
-    return data
-
-
-def known_fields(dataset: str) -> dict[str, dict[str, Any]]:
-    return catalogue().get(dataset, {})
-
-
 def suggest_fields(dataset: str, field: str) -> list[str]:
     fields = known_fields(dataset)
     suggestions: list[str] = []
@@ -136,7 +123,13 @@ def compile_query(
     count_field: str | None = None,
     sort_field: str | None = None,
     sort_order: Literal["asc", "desc"] = "desc",
+    name_variants: Mapping[str, Sequence[str]] | None = None,
 ) -> CompiledQuery:
+    """Validate structured filters and write the openFDA query.
+
+    ``name_variants`` maps filter values to the alternative names they should also match,
+    resolved beforehand through RxNorm (see ``app.fda.names``); compilation itself does no I/O.
+    """
     fields = known_fields(dataset)
     if not fields:
         raise QueryValidationError([f"No field catalogue is available for {dataset}."])
@@ -156,7 +149,7 @@ def compile_query(
         if not check(item.field, "Field"):
             continue
         try:
-            clauses.append(_clause(item, fields[item.field], notes))
+            clauses.append(_clause(item, fields[item.field], notes, name_variants or {}))
         except ValueError as error:
             errors.append(f"Filter on {item.field!r}: {error}")
 
@@ -175,7 +168,21 @@ def compile_query(
     return CompiledQuery(search=search, count=count, sort=sort, notes=notes)
 
 
-def _clause(item: FDAFilter, spec: dict[str, Any], notes: list[str]) -> str:
+def text_values(filters: Sequence[FDAFilter]) -> list[str]:
+    """Filter values that are names or phrases, and so worth resolving to synonyms."""
+    return [
+        item.value.strip()
+        for item in filters
+        if item.match in ("contains", "exact") and item.value and item.value.strip()
+    ]
+
+
+def _clause(
+    item: FDAFilter,
+    spec: dict[str, Any],
+    notes: list[str],
+    name_variants: Mapping[str, Sequence[str]],
+) -> str:
     if item.match == "exists":
         return f"_exists_:{item.field}"
     if item.match == "range":
@@ -185,7 +192,8 @@ def _clause(item: FDAFilter, spec: dict[str, Any], notes: list[str]) -> str:
     if not item.value or not item.value.strip():
         raise ValueError(f"{item.match} needs a value")
 
-    names = search_names(item.value)
+    value = " ".join(item.value.split())
+    names = list(name_variants.get(value, (value,))) or [value]
     if len(names) > 1:
         notes.append(
             f"{item.value!r} was also searched as {names[1]!r} (international and US names differ)."

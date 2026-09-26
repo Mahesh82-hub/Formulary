@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.clinicaltrials.client import ClinicalTrialsClient
-from app.sources.federation import FederatedRecord
+from app.sources.federation import FederatedRecord, SearchRequest
 
 SNIPPET_MAX_CHARACTERS = 900
 
@@ -16,7 +16,8 @@ class ClinicalTrialsSearcher:
     def __init__(self, client: ClinicalTrialsClient) -> None:
         self._client = client
 
-    async def search(self, query: str, *, limit: int) -> list[FederatedRecord]:
+    async def search(self, request: SearchRequest, *, limit: int) -> list[FederatedRecord]:
+        query = request.boolean() or request.query
         page = await self._client.search(query, limit=limit)
         provenance = self._client.provenance(page.api_url)
         records: list[FederatedRecord] = []

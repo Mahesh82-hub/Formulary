@@ -43,8 +43,7 @@ def _single_page_text_pdf(text: str) -> bytes:
         payload.extend(f"{offset:010d} 00000 n \n".encode())
     payload.extend(
         (
-            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-            f"startxref\n{xref}\n%%EOF\n"
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
         ).encode()
     )
     return bytes(payload)

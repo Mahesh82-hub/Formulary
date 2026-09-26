@@ -175,9 +175,7 @@ def _label(
     return record
 
 
-async def _run_labels(
-    records: list[dict[str, Any]], snapshots: InMemorySnapshots
-) -> Any:
+async def _run_labels(records: list[dict[str, Any]], snapshots: InMemorySnapshots) -> Any:
     detector = LabelChangeDetector(_fda(lambda _: _page(records)))
     result = await detector.detect(since=SINCE, until=UNTIL, snapshots=snapshots)
     snapshots.apply(result.snapshots)
@@ -369,11 +367,13 @@ def _trials(pages: list[list[dict[str, Any]]]) -> ClinicalTrialsClient:
 @pytest.mark.asyncio
 async def test_registrations_and_results_are_reported_without_a_baseline() -> None:
     client = _trials(
-        [[
-            _study("NCT00000001", first_posted="2026-09-18"),
-            _study("NCT00000002", results_posted="2026-09-19", phases=["PHASE2"]),
-            _study("NCT00000003"),  # old and unremarkable: baseline only
-        ]]
+        [
+            [
+                _study("NCT00000001", first_posted="2026-09-18"),
+                _study("NCT00000002", results_posted="2026-09-19", phases=["PHASE2"]),
+                _study("NCT00000003"),  # old and unremarkable: baseline only
+            ]
+        ]
     )
 
     result = await TrialChangeDetector(client).detect(

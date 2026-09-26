@@ -102,9 +102,7 @@ def order_events(events: Sequence[RegulatoryEvent]) -> list[RegulatoryEvent]:
     )
 
 
-def format_email(
-    watch: Watch, events: Sequence[RegulatoryEvent], app_url: str
-) -> tuple[str, str]:
+def format_email(watch: Watch, events: Sequence[RegulatoryEvent], app_url: str) -> tuple[str, str]:
     high = sum(1 for event in events if event.significance == "high")
     noun = "change" if len(events) == 1 else "changes"
     subject = f"Formulary: {len(events)} new {noun} for “{watch.name}”"

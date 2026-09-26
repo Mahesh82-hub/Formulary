@@ -131,9 +131,7 @@ class OpenFDAClient:
                 self._field_exists[(dataset, field)] = bool(result.total)
 
         await asyncio.gather(*(probe(field) for field in unknown))
-        missing = [
-            field for field in fields if self._field_exists.get((dataset, field)) is False
-        ]
+        missing = [field for field in fields if self._field_exists.get((dataset, field)) is False]
         suggestions = [f"openfda.{field}" for field in missing if not field.startswith("openfda.")]
         await asyncio.gather(*(probe(field) for field in suggestions))
         return {

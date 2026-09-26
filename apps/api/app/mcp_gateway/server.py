@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 from uuid import UUID
 
@@ -14,6 +14,7 @@ from pydantic import Field
 from app.clinicaltrials.client import get_clinicaltrials_client
 from app.core.config import Settings, get_settings
 from app.db.session import async_session_factory
+from app.fda.catalogue import label_sections
 from app.fda.client import OpenFDAClient, get_openfda_client, referenced_fields
 from app.fda.composition import DrugCompositionResult, drug_composition
 from app.fda.models import (
@@ -23,12 +24,13 @@ from app.fda.models import (
     OpenFDAQuery,
     OpenFDAResult,
 )
-from app.fda.names import search_names
+from app.fda.names import DrugNameResolver, PassthroughNames, expand, get_name_resolver
 from app.fda.structured import (
     FDAFilter,
     FDAQueryRejection,
     QueryValidationError,
     compile_query,
+    text_values,
 )
 from app.ingestion.models import (
     DocumentChunkPage,
@@ -56,7 +58,11 @@ from app.schemas.bioequivalence import (
 )
 from app.schemas.intelligence import RegulatoryEventBrief, RegulatoryEventSearchResult
 from app.services.bioequivalence import analyze_bioequivalence
-from app.sources.federation import FederatedSearchCoordinator, FederatedSearchResult
+from app.sources.federation import (
+    FederatedSearchCoordinator,
+    FederatedSearchResult,
+    SearchRequest,
+)
 from app.sources.registry import build_federated_coordinator
 
 MassUnit = Literal["mcg", "mg", "g"]
@@ -66,56 +72,10 @@ MASS_IN_GRAMS: dict[MassUnit, Decimal] = {
     "g": Decimal("1"),
 }
 
-LabelSection = Literal[
-    "boxed_warning",
-    "recent_major_changes",
-    "indications_and_usage",
-    "dosage_and_administration",
-    "dosage_forms_and_strengths",
-    "contraindications",
-    "warnings_and_precautions",
-    "adverse_reactions",
-    "drug_interactions",
-    "use_in_specific_populations",
-    "pregnancy",
-    "nursing_mothers",
-    "pediatric_use",
-    "geriatric_use",
-    "drug_abuse_and_dependence",
-    "overdosage",
-    "description",
-    "clinical_pharmacology",
-    "mechanism_of_action",
-    "pharmacodynamics",
-    "pharmacokinetics",
-    "clinical_studies",
-    "microbiology",
-    "nonclinical_toxicology",
-    "carcinogenesis_and_mutagenesis_and_impairment_of_fertility",
-    "references",
-    "how_supplied",
-    "storage_and_handling",
-    "patient_counseling_information",
-    "information_for_patients",
-    "instructions_for_use",
-    "spl_medguide",
-    "package_label_principal_display_panel",
-    # Composition. Prescription labels carry ingredients in spl_product_data_elements; OTC
-    # "Drug Facts" labels carry active_ingredient and inactive_ingredient. Without these the
-    # tool could not answer any composition question, which is how a paracetamol question
-    # ended with the false claim that FDA holds no inactive-ingredient data.
-    "active_ingredient",
-    "inactive_ingredient",
-    "spl_product_data_elements",
-    # OTC Drug Facts sections.
-    "purpose",
-    "warnings",
-    "do_not_use",
-    "ask_doctor",
-    "when_using",
-    "stop_use",
-]
-SUPPORTED_LABEL_SECTIONS: frozenset[str] = frozenset(get_args(LabelSection))
+# Every section openFDA publishes for drug labels, derived from its field catalogue. A
+# hand-typed list previously allowed 42 of 92, silently refusing sections such as abuse,
+# dependence, and controlled_substance.
+SUPPORTED_LABEL_SECTIONS: frozenset[str] = label_sections()
 LABEL_SECTION_ALIASES: dict[str, str] = {
     "dosage_forms": "dosage_forms_and_strengths",
     "strengths": "dosage_forms_and_strengths",
@@ -124,6 +84,8 @@ LABEL_SECTION_ALIASES: dict[str, str] = {
     "cmax": "pharmacokinetics",
     "tmax": "pharmacokinetics",
     "auc": "pharmacokinetics",
+    "warnings_and_precautions": "warnings_and_cautions",
+    "precautions_and_warnings": "warnings_and_cautions",
     "active_ingredients": "active_ingredient",
     "inactive_ingredients": "inactive_ingredient",
     "excipients": "inactive_ingredient",
@@ -137,12 +99,14 @@ LABEL_SECTION_ALIASES: dict[str, str] = {
 # plain source-dataset slug rather than an openFDA-only literal. Unknown slugs are
 # reported as a caveat by the coordinator instead of failing the assistant run.
 EvidenceDataset = str
-DEFAULT_LABEL_SECTIONS: list[LabelSection] = [
+DEFAULT_LABEL_SECTIONS: list[str] = [
     "boxed_warning",
     "indications_and_usage",
     "dosage_and_administration",
     "contraindications",
-    "warnings_and_precautions",
+    # openFDA names the Warnings and Precautions section "warnings_and_cautions";
+    # "warnings_and_precautions" exists on no label, so it silently returned nothing.
+    "warnings_and_cautions",
     "adverse_reactions",
     "clinical_pharmacology",
     "clinical_studies",
@@ -219,9 +183,13 @@ def create_internal_mcp_server(
     ingestion: FDAIngestionCoordinator | None = None,
     limits: OpenFDAToolLimits | None = None,
     federation: FederatedSearchCoordinator | None = None,
+    names: DrugNameResolver | None = None,
 ) -> FastMCP[None]:
     ingestion_coordinator = ingestion or get_fda_ingestion_coordinator()
     tool_limits = limits or OpenFDAToolLimits()
+    # Resolves international drug names to US ones through RxNorm in production; tests that
+    # do not care about name resolution get no expansion and make no network calls.
+    name_resolver = names or PassthroughNames()
     server = FastMCP[None](
         name="Formulary Internal Tools",
         instructions=(
@@ -524,6 +492,7 @@ def create_internal_mcp_server(
         deduplicated and chunked, and only a compact receipt is returned. Requests are capped
         at 25 records. Follow with search_ingested_evidence or read_ingested_document_chunks.
         """
+        variants = await expand(name_resolver, text_values(filters or []))
         try:
             compiled = compile_query(
                 dataset,
@@ -531,6 +500,7 @@ def create_internal_mcp_server(
                 combine=combine,
                 sort_field=sort_field,
                 sort_order=sort_order,
+                name_variants=variants,
             )
         except QueryValidationError as error:
             return FDAQueryRejection(dataset=dataset, errors=error.errors)
@@ -578,22 +548,32 @@ def create_internal_mcp_server(
     )
     async def search_all_sources(
         query: Annotated[str, Field(min_length=1, max_length=500)],
+        terms: Annotated[
+            list[Annotated[str, Field(min_length=1, max_length=80)]],
+            Field(min_length=1, max_length=6),
+        ],
         limit: int = 10,
     ) -> FederatedSearchResult:
         """Search every available source at once and return merged, attributed evidence.
 
-        Prefer this for any question that is not already narrowed to one dataset: it queries
-        all sources concurrently, so it costs about as much time as querying one of them.
+        query is the question in natural language. terms are the specific things every
+        matching record must mention - the drug, company, product, or condition, e.g.
+        ["tirzepatide", "heart failure"] - never question words such as "composition" or
+        "side effects". International drug names are also searched under their US names.
 
-        Every record names the source it came from; cite them. The `outcomes` list reports what
-        happened to each source that was asked, including any that timed out or failed - when
-        `caveats` is non-empty the answer is incomplete and you must say which sources were
-        unavailable. A source reporting `empty` simply had no match and is not a failure.
+        Prefer this for any question not already narrowed to one dataset: it queries all
+        sources concurrently. Every record names its source; cite them. When caveats is
+        non-empty the answer is incomplete - say which sources were unavailable. A source
+        reporting "empty" had no match and is not a failure.
         """
         if federation is None:
             raise ToolError("Federated search is not configured on this deployment.")
+        resolved = await expand(name_resolver, terms)
+        request = SearchRequest(
+            query=query, terms=tuple(resolved[term] for term in resolved if resolved[term])
+        )
         return await federation.search(
-            query,
+            request,
             limit=_bounded_int(limit, minimum=1, maximum=tool_limits.federated_max_records),
         )
 
@@ -714,6 +694,7 @@ def create_internal_mcp_server(
         searched under both international and US names. count_field returns value counts
         instead of records. Requests are capped at 10 records; skip is clamped to 0-25000.
         """
+        variants = await expand(name_resolver, text_values(filters or []))
         try:
             compiled = compile_query(
                 dataset,
@@ -722,6 +703,7 @@ def create_internal_mcp_server(
                 count_field=count_field,
                 sort_field=sort_field,
                 sort_order=sort_order,
+                name_variants=variants,
             )
         except QueryValidationError as error:
             return _rejected(fda, dataset, error.errors, limit=limit, skip=skip)
@@ -767,7 +749,7 @@ def create_internal_mcp_server(
         Unknown section names are reported in the result instead of failing the run.
         """
         selected_sections, ignored_sections = _normalize_label_sections(sections)
-        names = search_names(drug_name)
+        names = list(await name_resolver.variants(drug_name))
         clauses = [
             _or_phrase(
                 ("openfda.generic_name", "openfda.brand_name", "openfda.substance_name"), name
@@ -792,8 +774,7 @@ def create_internal_mcp_server(
             )
         if ignored_sections:
             caveats.append(
-                "Unsupported requested label sections were ignored: "
-                f"{', '.join(ignored_sections)}."
+                f"Unsupported requested label sections were ignored: {', '.join(ignored_sections)}."
             )
         return _cap_openfda_result(
             _replace_results(result, projected, caveats),
@@ -822,11 +803,10 @@ def create_internal_mcp_server(
         return await drug_composition(
             fda,
             drug,
+            names_resolver=name_resolver,
             manufacturers=manufacturers,
             max_manufacturers=_bounded_int(max_manufacturers, minimum=1, maximum=8),
-            products_per_manufacturer=_bounded_int(
-                products_per_manufacturer, minimum=1, maximum=3
-            ),
+            products_per_manufacturer=_bounded_int(products_per_manufacturer, minimum=1, maximum=3),
         )
 
     @server.tool(
@@ -848,7 +828,11 @@ def create_internal_mcp_server(
         extra: str | None = None
         if additional_filters:
             try:
-                extra = compile_query("drug/event", additional_filters).search
+                extra = compile_query(
+                    "drug/event",
+                    additional_filters,
+                    name_variants=await expand(name_resolver, text_values(additional_filters)),
+                ).search
             except QueryValidationError as error:
                 return _rejected(fda, "drug/event", error.errors, limit=1, skip=0)
         # Phrase rather than exact matching: exact matching on "TYLENOL" missed reports naming
@@ -864,7 +848,7 @@ def create_internal_mcp_server(
                 ),
                 name,
             )
-            for name in search_names(drug_name)
+            for name in await name_resolver.variants(drug_name)
         )
         if extra:
             search = f"({search}) AND {extra}"
@@ -1017,9 +1001,8 @@ def get_internal_mcp_server() -> FastMCP[None]:
         fda,
         ingestion=ingestion,
         limits=OpenFDAToolLimits.from_settings(settings),
-        federation=build_federated_coordinator(
-            fda, ingestion, settings, pubmed, clinicaltrials
-        ),
+        federation=build_federated_coordinator(fda, ingestion, settings, pubmed, clinicaltrials),
+        names=get_name_resolver(),
     )
 
 

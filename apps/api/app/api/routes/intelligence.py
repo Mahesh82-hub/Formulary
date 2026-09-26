@@ -210,9 +210,7 @@ async def recent_runs(session: DatabaseSession, _: CurrentUser) -> list[MonitorR
     return [MonitorRunResponse.model_validate(run) for run in runs]
 
 
-@router.post(
-    "/runs", response_model=MonitorTriggerResponse, status_code=status.HTTP_202_ACCEPTED
-)
+@router.post("/runs", response_model=MonitorTriggerResponse, status_code=status.HTTP_202_ACCEPTED)
 async def trigger_run(
     _: CurrentUser, monitor: Monitor, dispatcher: Dispatcher, background: BackgroundTasks
 ) -> MonitorTriggerResponse:

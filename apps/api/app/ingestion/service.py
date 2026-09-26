@@ -260,8 +260,7 @@ class FDAIngestionCoordinator:
                             Document.deleted_at.is_(None),
                             DocumentVersion.id == latest_version,
                             DocumentChunkEmbedding.model_name == self._embedder.model_name,
-                            DocumentChunkEmbedding.model_revision
-                            == self._embedder.model_revision,
+                            DocumentChunkEmbedding.model_revision == self._embedder.model_revision,
                         )
                     )
                     if self._max_vector_distance is not None:
@@ -272,11 +271,9 @@ class FDAIngestionCoordinator:
                             DocumentChunkEmbedding.embedding.cosine_distance(query_embedding)
                             <= self._max_vector_distance
                         )
-                    vector_statement = (
-                        vector_statement
-                        .order_by(distance, DocumentChunkEmbedding.id)
-                        .limit(candidate_limit)
-                    )
+                    vector_statement = vector_statement.order_by(
+                        distance, DocumentChunkEmbedding.id
+                    ).limit(candidate_limit)
                     if dataset:
                         vector_statement = vector_statement.where(
                             DataSource.slug == self._dataset_slug(dataset)
@@ -294,9 +291,9 @@ class FDAIngestionCoordinator:
             for rank, row in enumerate(text_rows, start=1):
                 chunk, version, document, source, _ = row
                 candidates[chunk.id] = (chunk, version, document, source)
-                fusion_scores[chunk.id] = fusion_scores.get(
-                    chunk.id, 0.0
-                ) + reciprocal_rank_score(rank, k=self._rrf_k)
+                fusion_scores[chunk.id] = fusion_scores.get(chunk.id, 0.0) + reciprocal_rank_score(
+                    rank, k=self._rrf_k
+                )
             seen_vector_chunks: set[UUID] = set()
             vector_rank = 0
             for row in vector_rows:
@@ -306,9 +303,9 @@ class FDAIngestionCoordinator:
                 seen_vector_chunks.add(chunk.id)
                 vector_rank += 1
                 candidates[chunk.id] = (chunk, version, document, source)
-                fusion_scores[chunk.id] = fusion_scores.get(
-                    chunk.id, 0.0
-                ) + reciprocal_rank_score(vector_rank, k=self._rrf_k)
+                fusion_scores[chunk.id] = fusion_scores.get(chunk.id, 0.0) + reciprocal_rank_score(
+                    vector_rank, k=self._rrf_k
+                )
             selected_ids = sorted(
                 candidates,
                 key=lambda chunk_id: (-fusion_scores[chunk_id], str(chunk_id)),
@@ -464,14 +461,12 @@ class FDAIngestionCoordinator:
                     existing_chunks = list(
                         await session.scalars(
                             select(DocumentChunk).where(
-                            DocumentChunk.document_version_id == existing_version.id
+                                DocumentChunk.document_version_id == existing_version.id
+                            )
                         )
                     )
-                    )
                     duplicate_chunks = len(existing_chunks)
-                    chunks_character_count += sum(
-                        len(chunk.content) for chunk in existing_chunks
-                    )
+                    chunks_character_count += sum(len(chunk.content) for chunk in existing_chunks)
                     embedding_result = await self._index_chunks(session, existing_chunks)
                     embedding_segments_created += embedding_result.segments_created
                     embedding_statuses.append(embedding_result.status)
@@ -517,16 +512,16 @@ class FDAIngestionCoordinator:
                         external_key=external_key,
                     )
                     chunk_rows = [
-                            DocumentChunk(
-                                document_version_id=version.id,
-                                chunk_index=chunk.chunk_index,
-                                section_path=chunk.section_path,
-                                content=chunk.content,
-                                content_hash=chunk.content_hash,
-                                token_count=chunk.token_count,
-                                chunk_metadata=chunk.metadata,
-                            )
-                            for chunk in prepared_chunks
+                        DocumentChunk(
+                            document_version_id=version.id,
+                            chunk_index=chunk.chunk_index,
+                            section_path=chunk.section_path,
+                            content=chunk.content,
+                            content_hash=chunk.content_hash,
+                            token_count=chunk.token_count,
+                            chunk_metadata=chunk.metadata,
+                        )
+                        for chunk in prepared_chunks
                     ]
                     session.add_all(chunk_rows)
                     await session.flush()
@@ -561,8 +556,7 @@ class FDAIngestionCoordinator:
                     "embedding_segments_created": embedding_segments_created,
                     "embedding_status": self._aggregate_embedding_status(embedding_statuses),
                     "stored_in_postgres": True,
-                    "indexed": self._aggregate_embedding_status(embedding_statuses)
-                    == "completed",
+                    "indexed": self._aggregate_embedding_status(embedding_statuses) == "completed",
                 }
                 await session.commit()
 
@@ -685,16 +679,16 @@ class FDAIngestionCoordinator:
                     external_key=external_key,
                 )
                 chunk_rows = [
-                        DocumentChunk(
-                            document_version_id=version.id,
-                            chunk_index=chunk.chunk_index,
-                            section_path=chunk.section_path,
-                            content=chunk.content,
-                            content_hash=chunk.content_hash,
-                            token_count=chunk.token_count,
-                            chunk_metadata=chunk.metadata,
-                        )
-                        for chunk in prepared_chunks
+                    DocumentChunk(
+                        document_version_id=version.id,
+                        chunk_index=chunk.chunk_index,
+                        section_path=chunk.section_path,
+                        content=chunk.content,
+                        content_hash=chunk.content_hash,
+                        token_count=chunk.token_count,
+                        chunk_metadata=chunk.metadata,
+                    )
+                    for chunk in prepared_chunks
                 ]
                 session.add_all(chunk_rows)
                 await session.flush()
@@ -707,9 +701,7 @@ class FDAIngestionCoordinator:
                 version = existing
                 existing_chunks = list(
                     await session.scalars(
-                        select(DocumentChunk).where(
-                            DocumentChunk.document_version_id == version.id
-                        )
+                        select(DocumentChunk).where(DocumentChunk.document_version_id == version.id)
                     )
                 )
                 chunk_count = len(existing_chunks)

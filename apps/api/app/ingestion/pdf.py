@@ -67,13 +67,14 @@ class DocumentFetcher:
 
     async def fetch(self, url: str) -> tuple[bytes, str]:
         validate_document_url(url, allowed_hosts=self._allowed_hosts)
-        async with httpx.AsyncClient(
-            timeout=self._timeout_seconds,
-            follow_redirects=True,
-            transport=self._transport,
-        ) as client, client.stream(
-            "GET", url, headers={"Accept": "application/pdf"}
-        ) as response:
+        async with (
+            httpx.AsyncClient(
+                timeout=self._timeout_seconds,
+                follow_redirects=True,
+                transport=self._transport,
+            ) as client,
+            client.stream("GET", url, headers={"Accept": "application/pdf"}) as response,
+        ):
             response.raise_for_status()
             final_url = str(response.url)
             # Re-check after redirects: the first URL passing the allowlist says nothing about
@@ -168,12 +169,8 @@ class PDFEvidenceExtractor:
                     result.tables += 1
                     result.sections.append(
                         {
-                            "section_path": (
-                                f"$.pages[{page_number}].tables[{table_number}]"
-                            ),
-                            "content": (
-                                f"[Page {page_number}, Table {table_number}]\n{rendered}"
-                            ),
+                            "section_path": (f"$.pages[{page_number}].tables[{table_number}]"),
+                            "content": (f"[Page {page_number}, Table {table_number}]\n{rendered}"),
                             "metadata": {
                                 "page_number": page_number,
                                 "table_number": table_number,

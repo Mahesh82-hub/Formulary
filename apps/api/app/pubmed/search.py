@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.pubmed.client import PubMedClient
-from app.sources.federation import FederatedRecord
+from app.sources.federation import FederatedRecord, SearchRequest
 
 SNIPPET_MAX_CHARACTERS = 900
 
@@ -16,7 +16,8 @@ class PubMedSearcher:
     def __init__(self, client: PubMedClient) -> None:
         self._client = client
 
-    async def search(self, query: str, *, limit: int) -> list[FederatedRecord]:
+    async def search(self, request: SearchRequest, *, limit: int) -> list[FederatedRecord]:
+        query = request.boolean() or request.query
         articles = await self._client.search(query, limit=limit)
         api_url = self._client.public_url(
             "esearch.fcgi",

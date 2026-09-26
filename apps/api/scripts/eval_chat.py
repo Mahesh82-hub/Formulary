@@ -148,6 +148,8 @@ class Outcome:
     answer: str
     tools: list[str]
     completion_reason: str | None
+    # What each completed tool returned, as the model saw it: the evidence the answer may use.
+    contexts: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -205,10 +207,10 @@ async def run_case(client: AsyncClient, case: Case, provider: str, model: str) -
             .where(AssistantRun.conversation_id == conversation_id)
             .order_by(AssistantRun.created_at.desc())
         )
-        tools = (
+        executions = (
             list(
-                await session.scalars(
-                    select(ToolExecution.tool_name)
+                await session.execute(
+                    select(ToolExecution.tool_name, ToolExecution.status, ToolExecution.result)
                     .where(ToolExecution.run_id == run.id)
                     .order_by(ToolExecution.started_at)
                 )
@@ -216,10 +218,16 @@ async def run_case(client: AsyncClient, case: Case, provider: str, model: str) -
             if run
             else []
         )
+        tools = [name for name, _, _ in executions]
+        contexts = [
+            json.dumps(result.get("data"), ensure_ascii=False, default=str)
+            for _, status, result in executions
+            if status == "completed" and isinstance(result, dict)
+        ]
         reason = run.orchestration_state.get("completion_reason") if run else None
         run_error = run.error if run and run.status == "failed" else None
         figures = run.orchestration_state.get("ungrounded_figures") if run else None
-    outcome = Outcome(case, seconds, answer, tools, reason)
+    outcome = Outcome(case, seconds, answer, tools, reason, contexts)
     outcome.failures = grade(case, answer, tools, reason)
     if figures:
         # The same check readers see: figures no retrieved source supports.

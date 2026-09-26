@@ -1,42 +1,27 @@
-from typing import Any, Literal, get_args
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
+from app.fda.catalogue import datasets
 from app.sources.models import SourceProvenance
 
-OpenFDADataset = Literal[
-    "animalandveterinary/event",
-    "cosmetic/event",
-    "device/510k",
-    "device/classification",
-    "device/covid19serology",
-    "device/enforcement",
-    "device/event",
-    "device/pma",
-    "device/recall",
-    "device/registrationlisting",
-    "device/udi",
-    "drug/drugsfda",
-    "drug/enforcement",
-    "drug/event",
-    "drug/label",
-    "drug/ndc",
-    "drug/orangebook",
-    "drug/shortages",
-    "food/enforcement",
-    "food/event",
-    "other/historicaldocument",
-    "other/nsde",
-    "other/substance",
-    "other/unii",
-    "tobacco/problem",
-    "tobacco/researchdigitalads",
-    "tobacco/researchpreventionads",
-    "tobacco/researchsmokefree",
-    "transparency/crl",
-]
+OPENFDA_DATASETS: frozenset[str] = datasets()
 
-OPENFDA_DATASETS: frozenset[str] = frozenset(get_args(OpenFDADataset))
+
+def _known_dataset(value: str) -> str:
+    if value not in OPENFDA_DATASETS:
+        raise ValueError(f"Unknown openFDA dataset {value!r}")
+    return value
+
+
+# Derived from openFDA's published catalogue rather than typed out by hand. The enum reaches
+# the model through the tool schema, so it cannot invent a dataset; the validator enforces it,
+# which matters because the dataset name becomes part of the request URL.
+OpenFDADataset = Annotated[
+    str,
+    AfterValidator(_known_dataset),
+    Field(json_schema_extra={"enum": sorted(OPENFDA_DATASETS)}),
+]
 
 # openFDA rejects paging beyond this offset. Declared once so the client guard and the
 # MCP tool clamp cannot drift apart.

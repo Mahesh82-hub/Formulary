@@ -77,9 +77,8 @@ async def test_cancelled_regeneration_restores_previous_assistant_branch() -> No
             restored_conversation = await session.get(Conversation, conversation_id)
             assert restored_run is not None
             assert restored_run.status == "cancelled"
-            assert (
-                restored_run.orchestration_state["restored_superseded_message_id"]
-                == str(previous_response_id)
+            assert restored_run.orchestration_state["restored_superseded_message_id"] == str(
+                previous_response_id
             )
             assert restored_conversation is not None
             assert restored_conversation.active_leaf_message_id == previous_response_id

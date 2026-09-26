@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     clinicaltrials_rate_limit_per_second: float = Field(default=0.8, gt=0, le=5)
     clinicaltrials_enabled: bool = True
 
+    # Drug-name resolution through RxNorm (National Library of Medicine). International names
+    # such as paracetamol are also searched under their US adopted names.
+    rxnorm_enabled: bool = True
+    rxnorm_base_url: str = "https://rxnav.nlm.nih.gov/REST"
+    rxnorm_timeout_seconds: float = Field(default=15, gt=0, le=60)
+
     # Regulatory intelligence. The monitor polls sources for changes; watches route matching
     # changes to people. Sources refresh daily to weekly, so polling more often than every few
     # hours only spends rate budget.
@@ -123,7 +129,7 @@ class Settings(BaseSettings):
         "mention both.\n"
         "- Every number you state must appear in a tool result, for the same species and "
         "conditions, or be an explicit calculation from such numbers with the working shown. "
-        "When a source does not report a value, write \"not reported\" - never estimate, "
+        'When a source does not report a value, write "not reported" - never estimate, '
         "approximate, interpolate, or fill a table cell with a plausible value. A partial "
         "table is correct; an invented cell is not.\n"
         "- Cite each claim inline with the identifier the tool returned: 【pubmed:PMID】 for "

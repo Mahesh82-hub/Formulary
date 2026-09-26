@@ -47,9 +47,7 @@ def test_local_object_storage_is_content_addressed_and_compressed(tmp_path: Path
     assert first == second
     assert first.uri.endswith(".json.gz")
     assert first.compressed_byte_size > 0
-    assert first.character_count == len(
-        '{"results":[{"set_id":"label-1","text":"metformin"}]}'
-    )
+    assert first.character_count == len('{"results":[{"set_id":"label-1","text":"metformin"}]}')
     assert storage.read_json_gzip(first.uri) == payload
     assert len(list(tmp_path.rglob("*.json.gz"))) == 1
 
@@ -92,8 +90,7 @@ def _single_page_text_pdf(text: str) -> bytes:
         payload.extend(f"{offset:010d} 00000 n \n".encode())
     payload.extend(
         (
-            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-            f"startxref\n{xref}\n%%EOF\n"
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
         ).encode()
     )
     return bytes(payload)

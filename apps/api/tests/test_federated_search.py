@@ -6,6 +6,7 @@ import pytest
 from app.sources.federation import (
     FederatedRecord,
     FederatedSearchCoordinator,
+    SearchRequest,
 )
 from app.sources.fusion import fuse_rankings, rank_by_fused_score, reciprocal_rank_score
 from app.sources.models import SourceProvenance
@@ -40,7 +41,7 @@ class StubSearcher:
         self._error = error
         self.calls = 0
 
-    async def search(self, query: str, *, limit: int) -> list[FederatedRecord]:
+    async def search(self, request: SearchRequest, *, limit: int) -> list[FederatedRecord]:
         self.calls += 1
         if self._delay:
             await asyncio.sleep(self._delay)

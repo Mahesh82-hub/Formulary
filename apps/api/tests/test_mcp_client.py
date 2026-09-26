@@ -6,6 +6,7 @@ from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.fda.client import OpenFDAClient
+from app.fda.names import StaticNames
 from app.mcp_gateway.client import (
     FastMCPToolClient,
     MCPToolInvocationError,
@@ -506,7 +507,9 @@ async def test_label_tool_searches_international_and_us_names_with_a_manufacture
         max_records=25,
         transport=httpx.MockTransport(handler),
     )
-    client = FastMCPToolClient(create_internal_mcp_server(fda))
+    client = FastMCPToolClient(
+        create_internal_mcp_server(fda, names=StaticNames({"paracetamol": "acetaminophen"}))
+    )
 
     result = await client.call_tool(
         "get_fda_drug_labels",
@@ -579,7 +582,9 @@ async def test_structured_filters_compile_to_valid_openfda_syntax() -> None:
         max_records=25,
         transport=httpx.MockTransport(handler),
     )
-    client = FastMCPToolClient(create_internal_mcp_server(fda))
+    client = FastMCPToolClient(
+        create_internal_mcp_server(fda, names=StaticNames({"paracetamol": "acetaminophen"}))
+    )
 
     result = await client.call_tool(
         "openfda_query",
@@ -636,3 +641,38 @@ async def test_adverse_event_filters_are_validated_against_the_event_catalogue()
 
     assert result.data["status"] == "invalid_query"
     assert "receivedate" in result.data["errors"][0]
+
+
+@pytest.mark.asyncio
+async def test_search_all_sources_sends_the_stated_terms_with_their_synonyms() -> None:
+    from app.sources.federation import FederatedRecord, FederatedSearchCoordinator, SearchRequest
+
+    received: list[SearchRequest] = []
+
+    class Recorder:
+        name = "recorder"
+
+        async def search(self, request: SearchRequest, *, limit: int) -> list[FederatedRecord]:
+            received.append(request)
+            return []
+
+    fda = OpenFDAClient(
+        api_key=None,
+        base_url="https://api.fda.test",
+        timeout_seconds=10,
+        max_records=25,
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"results": []})),
+    )
+    server = create_internal_mcp_server(
+        fda,
+        federation=FederatedSearchCoordinator([Recorder()]),
+        names=StaticNames({"paracetamol": "acetaminophen"}),
+    )
+
+    await FastMCPToolClient(server).call_tool(
+        "search_all_sources",
+        {"query": "paracetamol compositions from Pfizer", "terms": ["paracetamol", "Pfizer"]},
+    )
+
+    assert received[0].terms == (("paracetamol", "acetaminophen"), ("Pfizer",))
+    assert received[0].boolean() == '("paracetamol" OR "acetaminophen") AND "Pfizer"'

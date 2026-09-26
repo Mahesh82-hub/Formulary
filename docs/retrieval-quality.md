@@ -59,6 +59,29 @@ tables. These safeguards followed.
 
 Every figure check is pinned to lines from real answers in `tests/test_grounding.py`.
 
+## Facts are derived, policy is written down
+
+Hand-typed facts about external data drifted silently, so they are now derived:
+
+| Was hand-written | Now | What the hand-written version got wrong |
+|---|---|---|
+| The 29 openFDA dataset names | Derived from openFDA's published field catalogue (`app/fda/catalogue.py`) | Nothing yet, but nothing kept it current |
+| 42 label sections | All 92 from the catalogue | 52 sections refused, including `abuse`, `dependence`, and `controlled_substance`. The default `warnings_and_precautions` exists on **no** label (the field is `warnings_and_cautions`), so every default lookup omitted Warnings and Precautions |
+| 34 international/US drug-name pairs | RxNorm (National Library of Medicine), cached (`app/fda/names.py`) | Silent failure for any drug not listed. RxNorm resolves frusemide, glibenclamide, rifampicin, ciclosporin, and others without a table. Known gap: RxNorm does not list "adrenaline" as a synonym for epinephrine |
+| Filler words stripped from federated queries | The model states the `terms` every record must contain | Guessing which words mattered. When no record matches every term, the last-stated term is dropped and the search retries, always keeping the first |
+
+`tests/test_catalogue_consistency.py` checks every field name still written in code against the
+catalogue. It also calls each focused tool and validates the queries it actually sends. On its
+first run it found three wrong field names in the federated search configuration.
+
+Deliberate policy stays in code and is documented where it lives: significance rules, the
+research budget, repeat caps, retry behaviour, and the relevance threshold.
+
+Name resolution rules: an international name expands to its US ingredient name. A brand is
+never widened to its ingredient ("Tylenol" stays Tylenol). A fuzzy match is trusted only when
+it is exact, or when every candidate is the same ingredient. The second rule stops "Bayer" from
+becoming "aspirin" through Bayer Aspirin products.
+
 ## Web search
 
 For GPT-OSS models on Groq, the built-in `browser_search` tool is offered alongside the
@@ -67,6 +90,9 @@ Answers that used it end with a **Web sources** list noting that official record
 precedence. Configure it with `GROQ_WEB_SEARCH_ENABLED` and `GROQ_WEB_SEARCH_MODELS`.
 
 ## Keeping it working
+
+Evaluation is moving to LangSmith and RAGAS. `scripts/eval_chat.py` remains as a quick live smoke test; its checks (false absence claims, missing sources, unsupported figures, wrong tool) are candidates for custom evaluators there.
+
 
 ```bash
 python -m pytest                          # unit tests, including tests/test_retrieval_quality.py

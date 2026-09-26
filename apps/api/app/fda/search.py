@@ -12,8 +12,7 @@ from typing import Any
 
 from app.fda.client import OpenFDAClient, OpenFDAError
 from app.fda.models import OpenFDADataset
-from app.fda.names import rewrite_words
-from app.sources.federation import FederatedRecord
+from app.sources.federation import FederatedRecord, SearchRequest
 
 # Datasets searched for a general question, with the fields that best serve as a title and a
 # snippet. Order is irrelevant: federation queries them concurrently.
@@ -35,7 +34,7 @@ GENERAL_SEARCH_DATASETS: tuple[DatasetSpec, ...] = (
         "drug/shortages",
         "FDA drug shortage",
         ("generic_name", "company_name"),
-        ("status", "availability_information", "shortage_reason"),
+        ("status", "availability", "shortage_reason"),
     ),
     (
         "drug/enforcement",
@@ -52,8 +51,8 @@ GENERAL_SEARCH_DATASETS: tuple[DatasetSpec, ...] = (
     (
         "transparency/crl",
         "FDA complete response letter",
-        ("application_number", "product_name"),
-        ("letter_text",),
+        ("approval_name", "application_number", "company_name"),
+        ("text",),
     ),
 )
 
@@ -78,7 +77,7 @@ class OpenFDADatasetSearcher:
         self._title_fields = title_fields
         self._snippet_fields = snippet_fields
 
-    async def search(self, query: str, *, limit: int) -> list[FederatedRecord]:
+    async def search(self, request: SearchRequest, *, limit: int) -> list[FederatedRecord]:
         """Return this dataset's best matches, or nothing if it has none.
 
         A dataset with no match is not an error: most questions are relevant to only a few of
@@ -88,7 +87,8 @@ class OpenFDADatasetSearcher:
         try:
             result = await self._client.query(
                 self._dataset,
-                search=_free_text_expression(query),
+                # openFDA full-text search over every field, requiring each stated term.
+                search=request.boolean(),
                 limit=limit,
             )
         except OpenFDAError:
@@ -147,155 +147,6 @@ def build_openfda_searchers(client: OpenFDAClient) -> list[OpenFDADatasetSearche
         )
         for dataset, name, title_fields, snippet_fields in GENERAL_SEARCH_DATASETS
     ]
-
-
-# Words that describe what the user wants to know rather than what a record must contain.
-# Requiring them would reject relevant records ("composition" appears in almost no label),
-# and allowing them to match alone admits irrelevant ones.
-QUERY_STOPWORDS = frozenset(
-    {
-        "a",
-        "about",
-        "adverse",
-        "among",
-        "an",
-        "and",
-        "any",
-        "approval",
-        "approvals",
-        "approved",
-        "are",
-        "between",
-        "brand",
-        "brands",
-        "by",
-        "can",
-        "change",
-        "changed",
-        "changes",
-        "companies",
-        "company",
-        "compare",
-        "comparison",
-        "composition",
-        "compositions",
-        "could",
-        "data",
-        "details",
-        "do",
-        "does",
-        "effect",
-        "effects",
-        "event",
-        "events",
-        "excipient",
-        "excipients",
-        "fda",
-        "few",
-        "find",
-        "for",
-        "formulation",
-        "from",
-        "get",
-        "give",
-        "how",
-        "i",
-        "in",
-        "inactive",
-        "indication",
-        "indications",
-        "info",
-        "information",
-        "ingredient",
-        "ingredients",
-        "is",
-        "it",
-        "label",
-        "labeling",
-        "labels",
-        "latest",
-        "list",
-        "manufacturer",
-        "manufacturers",
-        "me",
-        "most",
-        "new",
-        "news",
-        "of",
-        "on",
-        "or",
-        "please",
-        "product",
-        "products",
-        "reaction",
-        "reactions",
-        "recall",
-        "recalled",
-        "recalls",
-        "recent",
-        "shortage",
-        "shortages",
-        "should",
-        "show",
-        "side",
-        "some",
-        "studies",
-        "study",
-        "tell",
-        "than",
-        "that",
-        "the",
-        "their",
-        "these",
-        "this",
-        "those",
-        "to",
-        "top",
-        "trial",
-        "trials",
-        "update",
-        "updates",
-        "us",
-        "usa",
-        "used",
-        "versus",
-        "vs",
-        "warning",
-        "warnings",
-        "we",
-        "what",
-        "which",
-        "who",
-        "with",
-        "would",
-        "you",
-    }
-)
-
-
-def _free_text_expression(query: str) -> str:
-    """Build a safe openFDA full-text expression from a user question.
-
-    Terms are joined with AND. openFDA treats space-separated terms as OR, so the previous
-    expression matched records containing any single word: "Pfizer paracetamol composition"
-    returned 16 Pfizer complete response letters that had nothing to do with paracetamol.
-    Filler words are dropped and international drug names are searched by their US names.
-
-    Reserved characters are stripped rather than escaped because a malformed expression fails
-    the whole dataset query, and a slightly broader match is a better outcome than a lost source.
-    """
-    reserved = set('":()[]{}\\/+-!^~*?')
-    cleaned = "".join(" " if character in reserved else character for character in query)
-    terms: list[str] = []
-    for word in rewrite_words(cleaned).split():
-        if word.upper() in {"AND", "OR", "NOT"} or word.casefold() in QUERY_STOPWORDS:
-            continue
-        if len(word) < 2 or word.casefold() in {term.casefold() for term in terms}:
-            continue
-        terms.append(word)
-    if not terms:
-        return '""'
-    return " AND ".join(f'"{term}"' for term in terms[:8])
 
 
 def _traverse(record: dict[str, Any], path: str) -> Any:
