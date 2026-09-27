@@ -51,6 +51,7 @@ type StreamTurnOptions = {
   text: string;
   provider?: "openai" | "groq";
   model?: string;
+  webSearch: boolean;
   parentMessageId?: string;
   pdf?: File;
   signal?: AbortSignal;
@@ -68,6 +69,7 @@ export async function streamChatTurn(options: StreamTurnOptions) {
     if (options.provider) form.set("provider", options.provider);
     if (options.model) form.set("model", options.model);
     if (options.parentMessageId) form.set("parent_message_id", options.parentMessageId);
+    form.set("web_search", String(options.webSearch));
     body = form;
   } else {
     headers.set("Content-Type", "application/json");
@@ -75,6 +77,7 @@ export async function streamChatTurn(options: StreamTurnOptions) {
       text: options.text,
       provider: options.provider,
       model: options.model || undefined,
+      web_search: options.webSearch,
       parent_message_id: options.parentMessageId,
     });
   }
@@ -101,6 +104,7 @@ type StreamRegenerationOptions = {
   messageId: string;
   provider?: "openai" | "groq";
   model?: string;
+  webSearch: boolean;
   signal?: AbortSignal;
   onEvent: (event: ChatEvent) => void;
 };
@@ -116,6 +120,7 @@ export async function streamRegeneration(options: StreamRegenerationOptions) {
       body: JSON.stringify({
         provider: options.provider,
         model: options.model || undefined,
+        web_search: options.webSearch,
       }),
     },
   );

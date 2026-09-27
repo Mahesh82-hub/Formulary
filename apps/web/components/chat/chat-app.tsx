@@ -32,6 +32,7 @@ export function ChatApp() {
   const [activities, setActivities] = useState<ToolActivity[]>([]);
   const [provider, setProvider] = useState<ProviderChoice>("default");
   const [model, setModel] = useState("");
+  const [webSearch, setWebSearch] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
 
   const loadConversations = useCallback(async () => {
@@ -251,6 +252,7 @@ export function ChatApp() {
         pdf,
         provider: provider === "default" ? undefined : provider,
         model: model.trim() || undefined,
+        webSearch,
         signal: abortRef.current?.signal,
         onEvent: handleEvent,
       });
@@ -268,6 +270,7 @@ export function ChatApp() {
           messageId: message.id,
           provider: provider === "default" ? undefined : provider,
           model: model.trim() || undefined,
+          webSearch,
           signal: abortRef.current?.signal,
           onEvent: handleEvent,
         }),
@@ -355,6 +358,8 @@ export function ChatApp() {
           model={model}
           onProviderChange={setProvider}
           onModelChange={setModel}
+          webSearch={webSearch}
+          onWebSearchChange={setWebSearch}
           onSend={sendMessage}
           onStop={() => abortRef.current?.abort()}
         />

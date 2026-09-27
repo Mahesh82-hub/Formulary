@@ -1,11 +1,12 @@
 "use client";
 
-import { ArrowUp, FileText, Paperclip, Square, WandSparkles, X } from "lucide-react";
+import { ArrowUp, FileText, Globe, Paperclip, Square, WandSparkles, X } from "lucide-react";
 import { ChangeEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ModelPicker, type ProviderChoice } from "@/components/chat/model-picker";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const MAX_PDF_BYTES = 20_000_000;
 
@@ -16,6 +17,8 @@ export function Composer({
   model,
   onProviderChange,
   onModelChange,
+  webSearch,
+  onWebSearchChange,
   onSend,
   onStop,
 }: {
@@ -25,6 +28,8 @@ export function Composer({
   model: string;
   onProviderChange: (provider: ProviderChoice) => void;
   onModelChange: (model: string) => void;
+  webSearch: boolean;
+  onWebSearchChange: (enabled: boolean) => void;
   onSend: (text: string, pdf?: File) => void;
   onStop: () => void;
 }) {
@@ -144,6 +149,26 @@ export function Composer({
             onProviderChange={onProviderChange}
             onModelChange={onModelChange}
           />
+          <button
+            type="button"
+            role="switch"
+            aria-checked={webSearch}
+            disabled={sending}
+            title={
+              webSearch
+                ? "Web search on: used after official sources have answered"
+                : "Web search off: official sources only"
+            }
+            onClick={() => onWebSearchChange(!webSearch)}
+            className={cn(
+              "focus-ring flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60",
+              webSearch
+                ? "bg-[var(--primary-soft)] text-[var(--primary)]"
+                : "text-[var(--muted)] hover:bg-[var(--surface-soft)] hover:text-[var(--foreground)]",
+            )}
+          >
+            <Globe className="size-3.5" /> Web search
+          </button>
           <div className="ml-auto flex items-center gap-2">
             <span className="hidden items-center gap-1 text-[10px] text-[var(--muted)] sm:flex">
               <WandSparkles className="size-3" /> MCP tools enabled
