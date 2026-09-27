@@ -198,6 +198,9 @@ class ChatOrchestrator:
             research_limit_reason: str | None = None
             tool_validation_recovered = False
             web_search_withdrawn = False
+            # The user can turn web search off for a turn; runs created before the switch
+            # existed keep the previous behaviour.
+            web_search_enabled = run.orchestration_state.get("web_search_enabled", True) is True
             clean_synthesis_fallback_used = False
             clarification_block: dict[str, Any] | None = None
 
@@ -246,7 +249,9 @@ class ChatOrchestrator:
                     # Official sources first, enforced rather than requested: web search is
                     # offered only once an official tool has answered. In evaluation the model
                     # otherwise sometimes went straight to the web.
-                    offer_web_search = tool_calls_executed > 0 and not web_search_withdrawn
+                    offer_web_search = (
+                        web_search_enabled and tool_calls_executed > 0 and not web_search_withdrawn
+                    )
                     completion = None
                     for allow_web_search in (True, False) if offer_web_search else (False,):
                         try:

@@ -937,7 +937,9 @@ class ScriptedRepeatingToolGateway:
         return LLMCompletion(provider_response_id="repeat-final", text="Converted the values.")
 
 
-async def _turn(gateway: Any, text: str) -> tuple[str, AssistantRun, list[ToolExecution]]:
+async def _turn(
+    gateway: Any, text: str, *, web_search: bool = True
+) -> tuple[str, AssistantRun, list[ToolExecution]]:
     async with async_session_factory() as session:
         user = User(email=f"resilience-{uuid4()}@example.com")
         session.add(user)
@@ -952,7 +954,12 @@ async def _turn(gateway: Any, text: str) -> tuple[str, AssistantRun, list[ToolEx
             conversation_id = created.json()["id"]
             response = await client.post(
                 f"/api/v1/conversations/{conversation_id}/turns",
-                json={"text": text, "provider": "groq", "model": "test-model"},
+                json={
+                    "text": text,
+                    "provider": "groq",
+                    "model": "test-model",
+                    "web_search": web_search,
+                },
             )
         async with async_session_factory() as session:
             run = await session.scalar(
@@ -1073,6 +1080,20 @@ async def test_a_rejected_browser_action_withdraws_web_search_and_keeps_research
     assert run.orchestration_state["web_search_withdrawn"] is True
     assert run.orchestration_state["tool_validation_recovered"] is False
     assert run.orchestration_state["completion_reason"] == "model_response"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_web_search_is_never_offered_when_the_user_turns_it_off() -> None:
+    gateway = ScriptedBrowserFindGateway()
+
+    body, run, _ = await _turn(gateway, "Convert 1500 mcg to mg", web_search=False)
+
+    assert run.status == "completed"
+    assert "1.5 mg" in body
+    assert [call["allow_web_search"] for call in gateway.calls] == [False, False]
+    assert run.orchestration_state["web_search_enabled"] is False
+    assert run.orchestration_state["web_search_withdrawn"] is False
 
 
 @pytest.mark.asyncio

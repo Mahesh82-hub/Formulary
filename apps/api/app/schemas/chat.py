@@ -71,6 +71,8 @@ class MessageEdit(BaseModel):
 class ChatTurnRequest(MessageCreate):
     provider: Literal["openai", "groq"] | None = None
     model: str | None = Field(default=None, min_length=1, max_length=128)
+    # Whether the model may use web search after the official sources have answered.
+    web_search: bool = True
 
     @field_validator("model")
     @classmethod
@@ -86,6 +88,8 @@ class ChatTurnRequest(MessageCreate):
 class RegenerateRequest(BaseModel):
     provider: Literal["openai", "groq"] | None = None
     model: str | None = Field(default=None, min_length=1, max_length=128)
+    # Whether the model may use web search after the official sources have answered.
+    web_search: bool = True
 
     @field_validator("model")
     @classmethod

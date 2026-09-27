@@ -286,6 +286,7 @@ async def create_chat_turn_with_pdf(
     provider: Annotated[ProviderName | None, Form()] = None,
     model: Annotated[str | None, Form(max_length=128)] = None,
     parent_message_id: Annotated[UUID | None, Form()] = None,
+    web_search: Annotated[bool, Form()] = True,
 ) -> StreamingResponse:
     # Reject unknown conversations before performing CPU-intensive document extraction.
     await owned_conversation(session, conversation_id, user.id)
@@ -296,6 +297,7 @@ async def create_chat_turn_with_pdf(
             provider=provider,
             model=model,
             parent_message_id=parent_message_id,
+            web_search=web_search,
         )
     except ValidationError as error:
         details = "; ".join(str(item["msg"]) for item in error.errors())
@@ -403,6 +405,7 @@ async def _start_chat_turn(
         provider=provider,
         model=model,
         status="queued",
+        orchestration_state={"web_search_enabled": payload.web_search},
     )
     session.add(run)
     await session.commit()
@@ -511,11 +514,14 @@ async def regenerate_message(
         provider=provider,
         model=model,
         status="queued",
-        orchestration_state=(
-            {"supersedes_message_id": str(supersedes_message_id)}
-            if supersedes_message_id is not None
-            else {}
-        ),
+        orchestration_state={
+            "web_search_enabled": payload.web_search,
+            **(
+                {"supersedes_message_id": str(supersedes_message_id)}
+                if supersedes_message_id is not None
+                else {}
+            ),
+        },
     )
     session.add(run)
     await session.commit()
